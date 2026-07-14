@@ -23,6 +23,7 @@ build/
 data/
 tmp/
 logs/
+work/
 
 # IDE and OS
 .idea/
