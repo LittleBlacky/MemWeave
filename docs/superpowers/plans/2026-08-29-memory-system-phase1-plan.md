@@ -27,7 +27,7 @@
 
 ```text
 pyproject.toml
-src/agent_memory/
+src/memweave/
   __init__.py              # public exports and protocol version
   models.py                # domain and protocol Pydantic models
   errors.py                # typed protocol/domain errors
@@ -44,8 +44,8 @@ src/agent_memory/
   adapters/
     __init__.py
     base.py                # AgentAdapter protocol and lifecycle types
-    l1_middleware.py       # reference before/context/after-turn adapter
-    l3_tools.py            # governed memory tool definitions and dispatcher
+    middleware.py          # reference before/context/after-turn adapter
+    tools.py               # governed memory tool definitions and dispatcher
   http_api.py              # FastAPI adapter for Core and protocol endpoints
   worker.py                # local outbox worker
 tests/
@@ -57,8 +57,8 @@ tests/
   test_durable_versions.py
   test_outbox.py
   test_recall.py
-  test_l1_adapter.py
-  test_l3_tools.py
+  test_middleware_adapter.py
+  test_tools_adapter.py
   test_http_api.py
   test_phase1_integration.py
 ```
@@ -67,12 +67,12 @@ tests/
 
 **Files:**
 - Create: `pyproject.toml`
-- Create: `src/agent_memory/__init__.py`
-- Create: `src/agent_memory/models.py`
-- Create: `src/agent_memory/errors.py`
-- Create: `src/agent_memory/clock.py`
-- Create: `src/agent_memory/protocol.py`
-- Test: `tests/conftest.py`, `tests/test_models.py`, `tests/test_protocol.py`
+- Create: `src/memweave/__init__.py`
+- Create: `src/memweave/models.py`
+- Create: `src/memweave/errors.py`
+- Create: `src/memweave/clock.py`
+- Create: `src/memweave/protocol.py`
+- Test: `tests/test_models.py`, `tests/test_protocol.py`
 
 **Interfaces:**
 - `AuthContext`, `Event`, `MemoryRecord`, `MemorySource`, `MemoryOperation`, `RecallRequest`, `RecallResult`, `Watermarks`.
@@ -90,8 +90,8 @@ tests/
 ## Task 2: SQLite Authority and Append-Only Event Store
 
 **Files:**
-- Create: `src/agent_memory/db.py`
-- Create: `src/agent_memory/events.py`
+- Create: `src/memweave/db.py`
+- Create: `src/memweave/events.py`
 - Test: `tests/test_events.py`
 
 **Interfaces:**
@@ -108,8 +108,8 @@ tests/
 ## Task 3: Session Projection and Explicit Command Policy
 
 **Files:**
-- Create: `src/agent_memory/session.py`
-- Create: `src/agent_memory/policy.py`
+- Create: `src/memweave/session.py`
+- Create: `src/memweave/policy.py`
 - Test: `tests/test_session_consistency.py`
 
 **Interfaces:**
@@ -126,7 +126,7 @@ tests/
 ## Task 4: Durable Memory Authority, Versions, and Tombstones
 
 **Files:**
-- Create: `src/agent_memory/durable.py`
+- Create: `src/memweave/durable.py`
 - Test: `tests/test_durable_versions.py`
 
 **Interfaces:**
@@ -141,8 +141,8 @@ tests/
 ## Task 5: Outbox and Retryable Worker
 
 **Files:**
-- Create: `src/agent_memory/outbox.py`
-- Create: `src/agent_memory/worker.py`
+- Create: `src/memweave/outbox.py`
+- Create: `src/memweave/worker.py`
 - Test: `tests/test_outbox.py`
 
 **Interfaces:**
@@ -159,7 +159,7 @@ tests/
 ## Task 6: Recall Service with Budget and Consistency Controls
 
 **Files:**
-- Create: `src/agent_memory/recall.py`
+- Create: `src/memweave/recall.py`
 - Test: `tests/test_recall.py`
 
 **Interfaces:**
@@ -172,32 +172,32 @@ tests/
 - [ ] **Step 4: Run focused recall tests** and verify all constraints.
 - [ ] **Step 5: Commit** with `feat: add bounded session-first recall`.
 
-## Task 7: MemoryKernel and L1 Middleware Adapter
+## Task 7: MemoryKernel and Middleware Adapter
 
 **Files:**
-- Create: `src/agent_memory/kernel.py`
-- Create: `src/agent_memory/adapters/base.py`
-- Create: `src/agent_memory/adapters/l1_middleware.py`
-- Test: `tests/test_l1_adapter.py`
+- Create: `src/memweave/kernel.py`
+- Create: `src/memweave/adapters/base.py`
+- Create: `src/memweave/adapters/middleware.py`
+- Test: `tests/test_middleware_adapter.py`
 
 **Interfaces:**
 - `MemoryKernel.append_event(...)`, `recall(request)`, `remember(operation)`, `forget(operation)`, `session_state(session_id)`.
 - `AgentAdapter.capabilities() -> CapabilitySet`.
 - `L1Middleware.start_turn(TurnInput) -> TurnHandle`; `provide_context(handle) -> ContextEnvelope`; `record_event(handle, ProtocolEvent)`; `finish_turn(handle, TurnOutcome)`.
 
-- [ ] **Step 1: Write failing tests** proving before-turn recall is automatic, explicit remember/update/forget is synchronous, after-turn emits events and enqueues extraction, and adapter reports `session_consistent` plus degradation flags.
-- [ ] **Step 2: Run `python -m pytest tests/test_l1_adapter.py -q`** and verify failure.
+- [ ] **Step 1: Write failing tests** proving middleware before-turn recall is automatic, explicit remember/update/forget is synchronous, after-turn emits events and enqueues extraction, and adapter reports `session_consistent` plus degradation flags.
+- [ ] **Step 2: Run `python -m pytest tests/test_middleware_adapter.py -q`** and verify failure.
 - [ ] **Step 3: Implement Kernel orchestration and L1 hooks**; short-circuit explicit commands before model execution, inject bounded context envelopes, propagate request/idempotency metadata, and never let memory text become instructions.
-- [ ] **Step 4: Run adapter tests** with a fake host Agent and verify the N-turn race scenario returns the latest session projection.
+- [ ] **Step 4: Run middleware adapter tests** with a fake host Agent and verify the N-turn race scenario returns the latest session projection.
 - [ ] **Step 5: Commit** with `feat: add l1 middleware adapter`.
 
-## Task 8: L3 Tools/MCP Adapter and HTTP Surface
+## Task 8: Tools/MCP Adapter and HTTP Surface
 
 **Files:**
-- Create: `src/agent_memory/adapters/l3_tools.py`
-- Create: `src/agent_memory/http_api.py`
-- Create: `src/agent_memory/adapters/__init__.py`
-- Test: `tests/test_l3_tools.py`, `tests/test_http_api.py`
+- Create: `src/memweave/adapters/tools.py`
+- Create: `src/memweave/http_api.py`
+- Create: `src/memweave/adapters/__init__.py`
+- Test: `tests/test_tools_adapter.py`, `tests/test_http_api.py`
 
 **Interfaces:**
 - `ToolDispatcher.list_tools() -> list[ToolSpec]`.
@@ -206,7 +206,7 @@ tests/
 - HTTP routes: `POST /v1/protocol/turns`, `POST /v1/recall`, `POST /v1/memories`, `DELETE /v1/memories/{memory_id}`.
 
 - [ ] **Step 1: Write failing tests** for generated schemas, server-injected identity, permission rejection, tool budgets, idempotency, and HTTP protocol-version negotiation.
-- [ ] **Step 2: Run the L3 and HTTP tests** and verify failure.
+- [ ] **Step 2: Run the tools and HTTP tests** and verify failure.
 - [ ] **Step 3: Implement governed dispatch** using Kernel methods; reject unknown fields and client scope overrides, enforce per-request top-k/token/tool-call limits, and return watermarks/consistency/degraded metadata.
 - [ ] **Step 4: Run focused tests** and verify tool and HTTP behavior.
 - [ ] **Step 5: Commit** with `feat: add governed l3 tools and protocol http api`.
