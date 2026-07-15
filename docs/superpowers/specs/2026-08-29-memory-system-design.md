@@ -183,6 +183,70 @@ SDK 与独立服务共享领域模型，核心 API 包括：`append_event`、`re
 
 插件边界包括 MemoryKind、Extractor、Recall、Policy、Source Adapter、Index Adapter 和 Lifecycle Hook。插件不能绕过事件日志、权限、版本和审计。不同场景通过策略配置实现，不复制核心代码。
 
+### 8.1 框架无关 Memory Protocol
+
+MemWeave 不假设 Agent 使用某一种运行时、模型供应商或编排框架。所有接入方先转换为统一的 `Memory Protocol` 事件和请求，再由 Memory Core 处理。协议只描述记忆相关语义，不接管 Agent 的规划、工具执行和模型循环。
+
+标准事件至少包括：
+
+```text
+turn.started       一轮开始，携带 session、任务目标和当前上下文摘要
+context.requested  Agent 即将组装模型上下文，请求基础召回
+model.input        发往模型的消息或裁剪后的上下文
+model.output       模型输出（包括工具调用意图）
+tool.called        工具调用及参数摘要
+tool.completed     工具结果及成功/失败状态
+turn.completed     一轮完成，可触发异步提取
+episode.completed  任务或阶段完成，可触发经验归纳
+memory.command     显式 remember/update/forget/confirm 操作
+```
+
+协议请求中的身份、租户和作用域由 Adapter 从宿主 Agent 的可信运行时注入；客户端消息中同名字段一律视为不可信数据。每个请求带 `protocol_version`、`request_id`、`session_id`、`causation_id` 和能力声明，响应带 `watermarks`、`consistency`、`degraded` 和可审计的 `decision_id`。
+
+### 8.2 Capability Negotiation
+
+Adapter 启动时向 Core 声明能力：是否能在 turn 前后执行 Hook、是否能拦截模型请求、是否支持原生工具注册、是否能接收上下文补丁、是否能报告工具和 Episode 生命周期。Core 根据能力返回接入等级和保证集合；缺失能力不得被假设存在。
+
+### 8.3 Agent Adapter 接入等级
+
+```text
+L1 Native Middleware
+  before_turn/context_provider/after_turn Hook 可用。
+  Core 自动完成基础召回、显式写入和 turn 结束事件。
+  可提供 session_consistent 的最强保证。
+
+L2 API Proxy
+  只能拦截模型请求与响应，不修改 Agent 内部 loop。
+  Core 自动注入上下文并记录模型事件；显式工具语义可能不完整。
+  保证取决于代理覆盖范围，作为后续阶段实现。
+
+L3 Tools/MCP
+  Agent 通过 memory.search/get/remember/update/forget 工具主动调用。
+  兼容性最高，但不保证 Agent 会主动调用；系统只保证工具调用本身的权限、幂等和版本语义。
+```
+
+每个 Adapter 必须实现以下契约：
+
+```text
+capabilities() -> CapabilitySet
+start_turn(input: TurnInput) -> TurnHandle
+provide_context(handle, ContextEnvelope) -> ContextAck
+record_event(handle, ProtocolEvent) -> EventAck
+finish_turn(handle, TurnOutcome) -> FinishAck
+```
+
+L1 Adapter 还必须实现显式命令短路：检测到用户明确记住/修改/删除时，在模型继续生成前调用 Core 的同步命令接口。L3 Adapter 的工具 schema 由 Core 生成，Adapter 不得自行放宽参数、作用域或 Token 限制。所有等级都必须透传 `request_id` 和幂等键，并在降级时报告缺失事件和一致性级别。
+
+### 8.4 接入保证矩阵
+
+| 能力 | L1 Middleware | L2 Proxy | L3 Tools/MCP |
+| --- | --- | --- | --- |
+| 自动基础召回 | 是 | 是（代理覆盖时） | 否，需 Agent 调用 |
+| 显式记忆同步可见 | 是 | 部分，取决于拦截点 | 是，工具返回后 |
+| 自动记录完整工具链 | 是 | 代理可见范围内 | 仅记录通过记忆工具的调用 |
+| session_consistent | 是 | 需宿主配合 | 工具调用范围内 |
+| Agent 无需修改 | 否，需 Hook | 是 | 是 |
+
 ## 9. 失败模式与可观测性
 
 需要记录每次召回和写入的触发原因、规则/Router 决策、memory_id、source_seq、水位、延迟、超时、降级和工具调用次数。核心指标包括召回命中率、陈旧读取率、durable lag、提取成功率、索引延迟和记忆冲突率。
@@ -201,14 +265,18 @@ SDK 与独立服务共享领域模型，核心 API 包括：`append_event`、`re
 4. 长期事实权威表，包含来源、版本和状态。
 5. Outbox 与可重试异步任务。
 6. 基础规则召回和 Token 预算。
-7. 本地 SDK 与最小 HTTP/MCP 接口。
+7. 框架无关 Memory Protocol 数据模型和版本校验。
+8. L1 参考 Middleware/Context Provider，自动基础召回、显式同步写入和 turn 生命周期事件。
+9. L3 Tools/MCP Adapter，提供受控 search/get/remember/update/forget 工具。
+10. 本地 SDK 与最小 HTTP 接口；L2 Proxy 只定义契约，不在本阶段实现。
 
 ### 第二阶段：自动化提取与检索增强
 
 1. 普通事实/偏好候选提取和晋升策略。
 2. 向量索引适配器与混合重排序。
-3. Agent 受控搜索工具。
-4. 用户确认、审计和敏感策略。
+3. L2 API Proxy Adapter 和更多宿主框架适配器。
+4. 向量/图检索及混合重排序。
+5. 用户确认、审计和敏感策略。
 
 ### 第三阶段：经验和多租户能力
 

@@ -1,257 +1,233 @@
-# Agent Memory System Phase 1 Implementation Plan
+# Agent Memory Protocol Phase 1 Implementation Plan
 
-> For agentic workers: REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-Goal: Build the first reliable, single-machine memory kernel with session-consistent reads, synchronous explicit memory operations, durable versioned facts, and a transport-neutral SDK.
+**Goal:** Deliver a transport-neutral Memory Core plus reference L1 Middleware and L3 Tools/MCP adapters that can add reliable memory to an existing Agent without owning its runtime loop.
 
-Architecture: Implement an event-sourced core in Python. SQLite is the local authority for immutable events, session projection, durable memories, and the outbox. Phase 1 uses deterministic exact/keyword recall behind a replaceable provider interface; vector, graph, LLM extraction, and MCP adapters are later phases.
+**Architecture:** The Core is an event-sourced Python library behind explicit ports for events, session projection, durable memory, recall, policy, and jobs. A versioned Memory Protocol translates host-specific lifecycle signals into Core requests. L1 automates recall and synchronous explicit writes through hooks; L3 exposes the same operations as governed tools. L2 API Proxy is specified but deferred.
 
-Tech Stack: Python 3.11+, Pydantic v2, SQLite in WAL mode, FastAPI, pytest, anyio, and standard-library asyncio/threading for the local worker.
+**Tech Stack:** Python 3.11+, Pydantic v2, SQLite WAL, FastAPI, pytest, anyio, and standard-library asyncio/threading for the local worker.
 
-Spec: docs/superpowers/specs/2026-08-29-memory-system-design.md
+**Spec:** docs/superpowers/specs/2026-08-29-memory-system-design.md
 
 ## Global Constraints
 
-- Current-session reads are session_consistent; cross-session durable processing is eventually consistent.
 - The immutable event log is the source of truth; session, durable, and search data are projections.
-- Every event has a stream-local strictly increasing sequence number and a globally unique event ID.
-- Every memory record carries kind, scope, status, source evidence, source sequence, and version.
-- Explicit remember/update/forget operations are visible before the request returns.
-- Vector and graph indexes are derived data and are never the only source of truth.
-- Tenant, user, agent, and project identity are injected by the service boundary.
-- Memory content cannot override system instructions or tool permissions.
-- All writes are idempotent; stale source versions cannot overwrite newer versions.
-- Phase 1 supports text and structured values; files and multimodal objects are references only.
+- Current-session reads use `session_consistent` by default; cross-session processing may be eventually consistent.
+- Every protocol request and event carries `protocol_version`, `request_id`, session identity, causation and idempotency information.
+- Tenant, user, agent, project and role identity are injected by the trusted adapter/service boundary; client payloads cannot widen scope.
+- Explicit remember/update/forget/confirm operations are synchronous and visible before the adapter acknowledges the turn.
+- Ordinary extraction and indexing are asynchronous, retryable, idempotent, and recoverable from the event log.
+- Memory data cannot override system instructions, tool permissions, or adapter capabilities.
+- Phase 1 implements text and structured values, deterministic recall, L1 and L3; vector, graph, LLM extraction, L2 proxy and automatic policy evolution remain later work.
 
 ---
 
 ## File and Module Map
 
-Create focused modules with these responsibilities:
-
-~~~text
+```text
 pyproject.toml
 src/agent_memory/
-  __init__.py
-  models.py              # domain enums and Pydantic models
-  errors.py              # typed domain errors
-  clock.py               # injectable UTC clock
-  db.py                  # SQLite connection, schema, transactions
-  events.py              # append-only event store and sequencing
-  session.py             # session projection and active working memory
-  durable.py             # authoritative memory table and resolver
-  outbox.py              # outbox records and retry states
-  recall.py              # exact/keyword recall and merge rules
-  policy.py              # explicit-operation parser and write policy
-  kernel.py              # transport-neutral MemoryKernel facade
-  http_api.py            # FastAPI v1 adapter
-  worker.py              # local outbox worker
+  __init__.py              # public exports and protocol version
+  models.py                # domain and protocol Pydantic models
+  errors.py                # typed protocol/domain errors
+  clock.py                 # injectable UTC clock
+  db.py                    # SQLite schema and transactions
+  events.py                # append-only event store
+  session.py               # session projection and working memory
+  durable.py               # durable memory authority and CAS resolver
+  outbox.py                # retryable asynchronous jobs
+  recall.py                # deterministic session-first recall
+  policy.py                # explicit command parser and policy hooks
+  kernel.py                # transport-neutral MemoryKernel facade
+  protocol.py              # protocol envelopes, capabilities, and validation
+  adapters/
+    __init__.py
+    base.py                # AgentAdapter protocol and lifecycle types
+    l1_middleware.py       # reference before/context/after-turn adapter
+    l3_tools.py            # governed memory tool definitions and dispatcher
+  http_api.py              # FastAPI adapter for Core and protocol endpoints
+  worker.py                # local outbox worker
 tests/
   conftest.py
   test_models.py
+  test_protocol.py
   test_events.py
   test_session_consistency.py
   test_durable_versions.py
   test_outbox.py
   test_recall.py
+  test_l1_adapter.py
+  test_l3_tools.py
   test_http_api.py
   test_phase1_integration.py
-~~~
+```
 
-Future vector, graph, extractor, source-adapter, and MCP modules must depend on interfaces in these modules, never on SQLite tables directly.
+## Task 1: Project Skeleton, Domain Models, and Protocol Envelopes
 
-## Task 1: Project Skeleton and Domain Models
+**Files:**
+- Create: `pyproject.toml`
+- Create: `src/agent_memory/__init__.py`
+- Create: `src/agent_memory/models.py`
+- Create: `src/agent_memory/errors.py`
+- Create: `src/agent_memory/clock.py`
+- Create: `src/agent_memory/protocol.py`
+- Test: `tests/conftest.py`, `tests/test_models.py`, `tests/test_protocol.py`
 
-Files:
-- Create: pyproject.toml
-- Create: src/agent_memory/__init__.py
-- Create: src/agent_memory/models.py
-- Create: src/agent_memory/errors.py
-- Create: src/agent_memory/clock.py
-- Test: tests/test_models.py
+**Interfaces:**
+- `AuthContext`, `Event`, `MemoryRecord`, `MemorySource`, `MemoryOperation`, `RecallRequest`, `RecallResult`, `Watermarks`.
+- `ProtocolVersion(major: int, minor: int)`, `RequestEnvelope[T](protocol_version, request_id, session_id, payload, causation_id, idempotency_key)`.
+- `CapabilitySet` fields: `before_turn`, `after_turn`, `context_provider`, `model_proxy`, `native_tools`, `tool_events`, `episode_events`.
+- `TurnInput`, `ContextEnvelope`, `ProtocolEvent`, `TurnOutcome`.
+- Enums `MemoryKind`, `MemoryScope`, `MemoryStatus`, `EventType`, `OperationType`, `ConsistencyMode`.
 
-Interfaces:
-- Event, MemoryRecord, MemorySource, MemoryOperation, RecallRequest, RecallResult, Watermarks.
-- AuthContext with tenant_id, user_id, agent_id, project_id, and roles.
-- Enums MemoryKind, MemoryScope, MemoryStatus, EventType, OperationType, ConsistencyMode.
-- utc_now() and Clock.now() -> datetime.
-- Create tests/conftest.py with make_record, make_update, and make_request helpers plus database, kernel, and FastAPI client fixtures. Helpers must use explicit defaults for scope, session, source sequence, and version.
-
-- [ ] Step 1: Write failing model tests.
-
-~~~python
-def test_memory_record_requires_scope_and_source_seq():
-    record = MemoryRecord(
-        id=uuid4(), kind=MemoryKind.FACT, scope=MemoryScope.PROJECT,
-        scope_id="p1", key="database.engine", value="PostgreSQL",
-        status=MemoryStatus.ACTIVE, confidence=0.96,
-        source=MemorySource(type="user_conversation", event_ids=["evt-1"]),
-        source_seq=7, version=1,
-    )
-    assert record.scope_id == "p1"
-    assert record.source_seq == 7
-~~~
-
-- [ ] Step 2: Run python -m pytest tests/test_models.py -q. Expected: FAIL because the package and models do not exist.
-- [ ] Step 3: Implement Pydantic validation. Reject confidence outside 0..1, missing scope, UPDATE without expected_version, and FORGET without a target key or memory ID.
-- [ ] Step 4: Run the focused tests. Expected: PASS, including invalid input cases.
-- [ ] Step 5: Commit with message feat: define memory kernel domain models.
+- [ ] **Step 1: Write failing tests** for required scope/source sequence, confidence bounds, protocol version presence, idempotency key format, and capability serialization.
+- [ ] **Step 2: Run `python -m pytest tests/test_models.py tests/test_protocol.py -q`** and verify collection fails because modules do not exist.
+- [ ] **Step 3: Implement Pydantic v2 models** with strict validation; reject UPDATE without `expected_version`, FORGET without target, and envelopes missing trusted session/request metadata.
+- [ ] **Step 4: Run the focused tests** and verify all pass.
+- [ ] **Step 5: Commit** with `feat: define memory protocol and domain models`.
 
 ## Task 2: SQLite Authority and Append-Only Event Store
 
-Files:
-- Create: src/agent_memory/db.py
-- Create: src/agent_memory/events.py
-- Test: tests/test_events.py
+**Files:**
+- Create: `src/agent_memory/db.py`
+- Create: `src/agent_memory/events.py`
+- Test: `tests/test_events.py`
 
-Interfaces:
-- Database(path: str) -> Database
-- Database.transaction() -> context manager[sqlite3.Connection]
-- EventStore.append(stream_id: str, event_type: EventType, payload: dict[str, Any], actor: str, event_id: UUID | None = None, occurred_at: datetime | None = None, causation_id: UUID | None = None, correlation_id: UUID | None = None) -> Event
-- EventStore.list_after(stream_id, seq) -> list[Event]
-- EventStore.last_seq(stream_id) -> int
+**Interfaces:**
+- `Database(path: str)` and `Database.transaction()`.
+- `EventStore.append(stream_id, event_type, payload, actor, request_id, event_id=None, occurred_at=None, causation_id=None, correlation_id=None) -> Event`.
+- `EventStore.list_after(stream_id, seq) -> list[Event]`; `EventStore.last_seq(stream_id) -> int`.
 
-- [ ] Step 1: Write tests proving stream sequences are 1, 2, duplicate event IDs are idempotent, and two concurrent writers never receive the same sequence.
-- [ ] Step 2: Run python -m pytest tests/test_events.py -q. Expected: FAIL because schema and EventStore are missing.
-- [ ] Step 3: Implement events, stream_heads, and projection_watermarks tables. Enable WAL, foreign keys, busy timeout, unique event_id, and unique stream_id plus seq. Allocate sequence under the write transaction. Store occurred_at, ingested_at, schema_version, causation_id, and correlation_id.
-- [ ] Step 4: Run the event suite. Expected: PASS, including concurrent append and duplicate delivery.
-- [ ] Step 5: Commit with message feat: add transactional append-only event store.
+- [ ] **Step 1: Write failing tests** for sequence allocation, duplicate event idempotency, concurrent writers, protocol metadata persistence, and immutable payload retrieval.
+- [ ] **Step 2: Run `python -m pytest tests/test_events.py -q`** and verify failure.
+- [ ] **Step 3: Implement SQLite WAL schema** for events, stream heads, projection watermarks, and request idempotency; allocate stream sequence under a write transaction and reject payload mutation.
+- [ ] **Step 4: Run the event tests** including a two-thread append stress case.
+- [ ] **Step 5: Commit** with `feat: add transactional event authority`.
 
-## Task 3: Session Projection and Synchronous Explicit Operations
+## Task 3: Session Projection and Explicit Command Policy
 
-Files:
-- Create: src/agent_memory/session.py
-- Create: src/agent_memory/policy.py
-- Test: tests/test_session_consistency.py
+**Files:**
+- Create: `src/agent_memory/session.py`
+- Create: `src/agent_memory/policy.py`
+- Test: `tests/test_session_consistency.py`
 
-Interfaces:
-- SessionStore.apply_event(event: Event) -> SessionState
-- SessionStore.get(session_id: str) -> SessionState
-- SessionStore.upsert_active(memory: MemoryRecord) -> None
-- ExplicitOperationParser.parse(text: str, context: ParseContext) -> list[MemoryOperation]
-- ParseContext contains tenant_id, user_id, session_id, project_id, and current_seq; parser never receives authority to choose these identities.
+**Interfaces:**
+- `SessionStore.apply_event(event: Event) -> SessionState`; `get(session_id) -> SessionState`; `upsert_active(memory) -> None`.
+- `ExplicitOperationParser.parse(text, context: ParseContext) -> list[MemoryOperation]`.
+- `ParseContext` contains server-injected tenant/user/session/project and current source sequence.
 
-- [ ] Step 1: Write tests for remember MySQL, update PostgreSQL, and immediate visibility after reopening the database.
-- [ ] Step 2: Run python -m pytest tests/test_session_consistency.py -q. Expected: FAIL because SessionStore and parser are missing.
-- [ ] Step 3: Implement recent messages, summary, active memories, and last_seq. Add rule parsing for explicit Chinese and English remember, update, and forget markers. Ambiguous text returns no operation. Apply event, session projection, explicit operation, and outbox insertion in one local transaction.
-- [ ] Step 4: Run tests for sequential changes, stale operations, ambiguous text fallback, and N unrelated turns. Expected: PASS.
-- [ ] Step 5: Commit with message feat: add session projection and explicit memory operations.
+- [ ] **Step 1: Write failing tests** for Chinese/English remember, update, forget, ambiguous text returning no command, and N unrelated turns preserving the latest working value.
+- [ ] **Step 2: Run the session test file** and verify failure.
+- [ ] **Step 3: Implement synchronous projection updates** for turn events and explicit commands; insert outbox records in the same transaction. Parser must never accept caller-supplied identity or final source sequence.
+- [ ] **Step 4: Run tests** for restart persistence, stale command rejection, and immediate visibility.
+- [ ] **Step 5: Commit** with `feat: add session projection and explicit memory policy`.
 
-## Task 4: Durable Memory Table, Resolver, and Tombstones
+## Task 4: Durable Memory Authority, Versions, and Tombstones
 
-Files:
-- Create: src/agent_memory/durable.py
-- Test: tests/test_durable_versions.py
+**Files:**
+- Create: `src/agent_memory/durable.py`
+- Test: `tests/test_durable_versions.py`
 
-Interfaces:
-- DurableMemoryStore.create(record: MemoryRecord) -> MemoryRecord
-- DurableMemoryStore.update(operation: MemoryOperation) -> MemoryRecord
-- DurableMemoryStore.forget(operation: MemoryOperation) -> Tombstone
-- DurableMemoryStore.get_active(scope, scope_id, key) -> MemoryRecord | None
-- DurableMemoryStore.list_versions(scope, scope_id, key) -> list[MemoryRecord]
+**Interfaces:**
+- `DurableMemoryStore.create(record)`, `update(operation)`, `forget(operation)`, `get_active(scope, scope_id, key)`, `list_versions(scope, scope_id, key)`.
 
-- [ ] Step 1: Write tests proving a stale expected_version raises StaleWrite, old values become superseded, and forget creates a tombstone.
-- [ ] Step 2: Run python -m pytest tests/test_durable_versions.py -q. Expected: FAIL because durable tables are missing.
-- [ ] Step 3: Create memories and tombstones tables. Keep superseded versions for audit; expose only active records. Require compare-and-swap on version and monotonic source_seq for the same key. Make forget idempotent and mask all derived reads.
-- [ ] Step 4: Run tests for same-value deduplication, stale writes, tombstone filtering, and restart persistence. Expected: PASS.
-- [ ] Step 5: Commit with message feat: add versioned durable memory authority.
+- [ ] **Step 1: Write failing tests** for compare-and-swap versions, monotonic `source_seq`, same-value deduplication, idempotent forget, and tombstone masking.
+- [ ] **Step 2: Run `python -m pytest tests/test_durable_versions.py -q`** and verify failure.
+- [ ] **Step 3: Implement authoritative memories and tombstones**; preserve superseded versions and source evidence, expose only active non-retracted records, and reject stale writes.
+- [ ] **Step 4: Run durable tests** including database reopen and out-of-order async updates.
+- [ ] **Step 5: Commit** with `feat: add versioned durable memory authority`.
 
-## Task 5: Outbox and Retryable Local Worker
+## Task 5: Outbox and Retryable Worker
 
-Files:
-- Create: src/agent_memory/outbox.py
-- Create: src/agent_memory/worker.py
-- Test: tests/test_outbox.py
+**Files:**
+- Create: `src/agent_memory/outbox.py`
+- Create: `src/agent_memory/worker.py`
+- Test: `tests/test_outbox.py`
 
-Interfaces:
-- Outbox.enqueue(event_id, topic, payload) -> OutboxItem
-- Outbox.claim(limit, lease_seconds) -> list[OutboxItem]
-- Outbox.get(item_id: UUID) -> OutboxItem
-- Outbox.mark_applied(item_id) -> None
-- Outbox.mark_retryable(item_id, error, next_attempt_at) -> None
-- LocalWorker.run_once() -> int
+**Interfaces:**
+- `Outbox.enqueue(event_id, topic, payload, idempotency_key) -> OutboxItem`.
+- `claim(limit, lease_seconds)`, `mark_applied`, `mark_retryable`, `get`.
+- `LocalWorker.run_once() -> int`.
 
-- [ ] Step 1: Write tests for retryable failure, lease expiry, duplicate delivery, and dead-letter after five attempts.
-- [ ] Step 2: Run python -m pytest tests/test_outbox.py -q. Expected: FAIL because outbox state is missing.
-- [ ] Step 3: Implement pending, processing, applied, retryable, and dead_letter states. Claim with a lease and attempt count. Use exponential backoff capped at five minutes. Require idempotency checks in every handler.
-- [ ] Step 4: Run the outbox suite. Expected: PASS, including restart recovery.
-- [ ] Step 5: Commit with message feat: add retryable outbox worker.
+- [ ] **Step 1: Write failing tests** for retry, lease expiry, duplicate delivery, five-attempt dead-letter, and replay after restart.
+- [ ] **Step 2: Run the outbox tests** and verify failure.
+- [ ] **Step 3: Implement state transitions** `pending → processing → applied|retryable|dead_letter`, exponential backoff capped at five minutes, and handler idempotency checks.
+- [ ] **Step 4: Run the outbox suite** and verify deterministic retries using an injected clock.
+- [ ] **Step 5: Commit** with `feat: add retryable outbox worker`.
 
-## Task 6: Recall Planner, Scope Merge, and Token Budget
+## Task 6: Recall Service with Budget and Consistency Controls
 
-Files:
-- Create: src/agent_memory/recall.py
-- Test: tests/test_recall.py
+**Files:**
+- Create: `src/agent_memory/recall.py`
+- Test: `tests/test_recall.py`
 
-Interfaces:
-- RecallRequest(query, session_id, visible_scopes, kinds, top_k, max_tokens, consistency)
-- RecallProvider.search(request) -> list[MemoryRecord]
-- RecallService.recall(request) -> RecallResult
-- The request test helper returns a RecallRequest with session_id s1, visible project p1, top_k 5, max_tokens 1000, and session_consistent unless overridden.
+**Interfaces:**
+- `RecallRequest(query, session_id, visible_scopes, kinds, top_k, max_tokens, consistency)`.
+- `RecallService.recall(request) -> RecallResult` and replaceable `RecallProvider.search(request)`.
 
-- [ ] Step 1: Write tests proving session PostgreSQL overrides durable MySQL, scope filtering works, and max_tokens is respected.
-- [ ] Step 2: Run python -m pytest tests/test_recall.py -q. Expected: FAIL because recall is missing.
-- [ ] Step 3: Implement deterministic phase-1 recall: session active memories plus durable active records, normalized key/keyword matching, scope policy, tombstone filtering, source-sequence merge, deduplication, top_k, and token budget. Do not call an LLM or vector index in phase 1. Mark returned values as memory data.
-- [ ] Step 4: Run the recall suite. Expected: PASS, including durable-store-unavailable fallback to session state.
-- [ ] Step 5: Commit with message feat: add deterministic session-first recall.
+- [ ] **Step 1: Write failing tests** for session-over-durable precedence, scope isolation, tombstone filtering, stale-version exclusion, token budget, and durable-unavailable fallback.
+- [ ] **Step 2: Run the recall tests** and verify failure.
+- [ ] **Step 3: Implement deterministic exact/keyword recall** with session-first merge, source-sequence ordering, permission filtering, deduplication, top-k and token limits; mark injected values as memory data.
+- [ ] **Step 4: Run focused recall tests** and verify all constraints.
+- [ ] **Step 5: Commit** with `feat: add bounded session-first recall`.
 
-## Task 7: MemoryKernel Facade and HTTP v1 API
+## Task 7: MemoryKernel and L1 Middleware Adapter
 
-Files:
-- Create: src/agent_memory/kernel.py
-- Create: src/agent_memory/http_api.py
-- Test: tests/test_http_api.py
+**Files:**
+- Create: `src/agent_memory/kernel.py`
+- Create: `src/agent_memory/adapters/base.py`
+- Create: `src/agent_memory/adapters/l1_middleware.py`
+- Test: `tests/test_l1_adapter.py`
 
-Interfaces:
-- MemoryKernel(db: Database, auth: AuthContext, clock: Clock) -> MemoryKernel
-- MemoryKernel.append_event(stream_id: str, event_type: EventType, payload: dict[str, Any], occurred_at: datetime | None = None, causation_id: UUID | None = None, correlation_id: UUID | None = None) -> Event
-- MemoryKernel.recall(request: RecallRequest) -> RecallResult
-- MemoryKernel.remember(operation: MemoryOperation) -> MemoryRecord
-- MemoryKernel.forget(operation: MemoryOperation) -> Tombstone
-- MemoryKernel.session_state(session_id: str) -> SessionState
-- POST /v1/events, POST /v1/recall, POST /v1/memories, DELETE /v1/memories/{memory_id}, GET /v1/sessions/{session_id}
+**Interfaces:**
+- `MemoryKernel.append_event(...)`, `recall(request)`, `remember(operation)`, `forget(operation)`, `session_state(session_id)`.
+- `AgentAdapter.capabilities() -> CapabilitySet`.
+- `L1Middleware.start_turn(TurnInput) -> TurnHandle`; `provide_context(handle) -> ContextEnvelope`; `record_event(handle, ProtocolEvent)`; `finish_turn(handle, TurnOutcome)`.
 
-- [ ] Step 1: Write API contract tests for remember, recall, forget, session state, missing auth, and cross-scope rejection.
-- [ ] Step 2: Run python -m pytest tests/test_http_api.py -q. Expected: FAIL because the kernel and routes are missing.
-- [ ] Step 3: Implement MemoryKernel transaction orchestration and FastAPI dependency injection for AuthContext. Construct the kernel with the server-derived AuthContext, ignore client identity fields, enforce scope permissions, and return request_id, watermarks, consistency, and degraded status.
-- [ ] Step 4: Run the API suite. Expected: PASS, with no raw memory values in logs.
-- [ ] Step 5: Commit with message feat: expose memory kernel sdk and http v1 api.
+- [ ] **Step 1: Write failing tests** proving before-turn recall is automatic, explicit remember/update/forget is synchronous, after-turn emits events and enqueues extraction, and adapter reports `session_consistent` plus degradation flags.
+- [ ] **Step 2: Run `python -m pytest tests/test_l1_adapter.py -q`** and verify failure.
+- [ ] **Step 3: Implement Kernel orchestration and L1 hooks**; short-circuit explicit commands before model execution, inject bounded context envelopes, propagate request/idempotency metadata, and never let memory text become instructions.
+- [ ] **Step 4: Run adapter tests** with a fake host Agent and verify the N-turn race scenario returns the latest session projection.
+- [ ] **Step 5: Commit** with `feat: add l1 middleware adapter`.
 
-## Task 8: End-to-End Consistency and Failure Tests
+## Task 8: L3 Tools/MCP Adapter and HTTP Surface
 
-Files:
-- Create: tests/test_phase1_integration.py
-- Modify: README.md
+**Files:**
+- Create: `src/agent_memory/adapters/l3_tools.py`
+- Create: `src/agent_memory/http_api.py`
+- Create: `src/agent_memory/adapters/__init__.py`
+- Test: `tests/test_l3_tools.py`, `tests/test_http_api.py`
 
-Interfaces:
-- Tests use only MemoryKernel and the v1 API; they do not inspect SQLite tables directly.
+**Interfaces:**
+- `ToolDispatcher.list_tools() -> list[ToolSpec]`.
+- `ToolDispatcher.invoke(name, arguments, auth: AuthContext, request_id) -> ToolResult`.
+- Tools: `memory.search`, `memory.get`, `memory.remember`, `memory.update`, `memory.forget`.
+- HTTP routes: `POST /v1/protocol/turns`, `POST /v1/recall`, `POST /v1/memories`, `DELETE /v1/memories/{memory_id}`.
 
-- [ ] Step 1: Write scenarios for remember MySQL then update PostgreSQL, N delayed outbox turns, duplicate delivery, worker crash/restart, forget filtering, and two-tenant isolation.
-- Use public APIs only; assert values and statuses rather than inspecting SQLite implementation tables.
-- Example test shape:
+- [ ] **Step 1: Write failing tests** for generated schemas, server-injected identity, permission rejection, tool budgets, idempotency, and HTTP protocol-version negotiation.
+- [ ] **Step 2: Run the L3 and HTTP tests** and verify failure.
+- [ ] **Step 3: Implement governed dispatch** using Kernel methods; reject unknown fields and client scope overrides, enforce per-request top-k/token/tool-call limits, and return watermarks/consistency/degraded metadata.
+- [ ] **Step 4: Run focused tests** and verify tool and HTTP behavior.
+- [ ] **Step 5: Commit** with `feat: add governed l3 tools and protocol http api`.
 
-~~~python
-def test_delayed_outbox_does_not_hide_latest_session_value(kernel):
-    kernel.remember(make_update("project.database", "MySQL", seq=1))
-    kernel.remember(make_update("project.database", "PostgreSQL", seq=2))
-    for _ in range(20):
-        kernel.append_event("session:s1", EventType.USER_MESSAGE, {"text": "unrelated"}, "user:u1")
-    result = kernel.recall(make_request("database"))
-    assert result.items[0].value == "PostgreSQL"
-~~~
+## Task 9: Integration, Recovery, and Documentation
 
-- [ ] Step 2: Run python -m pytest tests/test_phase1_integration.py -q. Expected: FAIL only for behavior not yet implemented.
-- [ ] Step 3: Inject a fake Clock and explicit worker ticks; avoid sleeps longer than 100 ms. Assert session and durable watermarks.
-- [ ] Step 4: Run python -m pytest -q. Expected: PASS.
-- [ ] Step 5: Run python -m compileall src. Expected: exit code 0.
-- [ ] Step 6: Run git diff --check. Expected: no whitespace errors.
-- [ ] Step 7: Document SQLite initialization, WAL mode, worker startup, API examples, consistency modes, and future adapter interfaces in README.md.
-- [ ] Step 8: Commit with message test: verify phase one memory consistency and recovery.
+**Files:**
+- Create: `tests/test_phase1_integration.py`
+- Modify: `README.md`
+
+- [ ] **Step 1: Write failing end-to-end tests** covering L1 automatic recall, L3 explicit search, N delayed outbox turns, duplicate/乱序 delivery, worker restart, tombstone filtering, and two-tenant isolation.
+- [ ] **Step 2: Run `python -m pytest tests/test_phase1_integration.py -q`** and verify only unimplemented behavior fails.
+- [ ] **Step 3: Implement missing integration glue** without bypassing Core interfaces; use fake clock and explicit worker ticks, never sleeps longer than 100 ms.
+- [ ] **Step 4: Run `python -m pytest -q`, `python -m compileall src`, and `git diff --check`.**
+- [ ] **Step 5: Document** Core/Protocol/Adapter boundaries, L1/L3 examples, consistency modes, worker startup, and L2 deferral in `README.md`.
+- [ ] **Step 6: Commit** with `test: verify phase one protocol and memory recovery`.
 
 ## Plan Self-Review
 
-Spec coverage: Tasks 1–4 cover object, event, lifecycle, scope, and version models. Task 5 covers Outbox, retries, and idempotency. Task 6 covers deterministic recall, scope merge, budgets, and degraded reads. Task 7 covers SDK/HTTP boundaries and injected identity. Task 8 covers phase-one acceptance scenarios. Vector, graph, LLM extraction, experience synthesis, and self-evolution are intentionally deferred to later phases as required by the spec.
+Spec coverage: Tasks 1–2 cover protocol metadata and event sourcing; Tasks 3–6 cover session, durable state, lifecycle, outbox, recall, scope, and budgets; Tasks 7–8 cover the required L1 and L3 adapter contracts and HTTP/tool governance; Task 9 covers phase-one acceptance and documentation. L2, vector, graph, extraction, experience synthesis, and policy evolution are explicitly deferred as required by the spec.
 
-Placeholder scan: The plan contains no TODO, TBD, implement-later, ellipsis, or unspecified test step. Every helper referenced by a test is defined in Task 1 or the task that owns it.
+Placeholder scan: No TODO/TBD or unspecified test steps are used. Every public type and method referenced by a later task is defined in an earlier task.
 
-Type consistency: All public methods use models from Task 1. MemoryKernel is the only facade consumed by HTTP and integration tests; storage and worker details remain behind the interfaces named in each task.
+Type consistency: Adapters depend only on `AgentAdapter`, `MemoryKernel`, and protocol models; HTTP and tools never access SQLite tables directly. Identity is always supplied by `AuthContext` from the service boundary.
