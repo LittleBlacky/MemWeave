@@ -2,6 +2,7 @@
 
 from .models import (
     AuthContext,
+    ConsistencyMode,
     Event,
     EventType,
     MemoryKind,
@@ -16,6 +17,7 @@ from .protocol import ProtocolVersion
 
 __all__ = [
     "AuthContext",
+    "ConsistencyMode",
     "Event",
     "EventType",
     "MemoryKind",

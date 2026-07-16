@@ -4,7 +4,7 @@ from enum import Enum
 from typing import Any, Dict, List, Optional, Set
 from uuid import UUID, uuid4
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .clock import utc_now
 
@@ -56,6 +56,12 @@ class OperationType(str, Enum):
     CONFIRM = "confirm"
 
 
+class ConsistencyMode(str, Enum):
+    EVENTUAL = "eventual"
+    SESSION_CONSISTENT = "session_consistent"
+    DURABLE_CONSISTENT = "durable_consistent"
+
+
 class MemorySource(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -78,7 +84,7 @@ class Event(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     event_id: UUID = Field(default_factory=uuid4)
-    event_type: EventType
+    event_type: str
     stream_id: str = Field(min_length=1)
     seq: int = Field(ge=1)
     actor: str = Field(min_length=1)
@@ -141,13 +147,13 @@ class RecallRequest(BaseModel):
     kinds: List[MemoryKind] = Field(default_factory=list)
     top_k: int = Field(default=5, ge=1)
     max_tokens: int = Field(default=1000, ge=1)
-    consistency: str = "session_consistent"
+    consistency: ConsistencyMode = ConsistencyMode.SESSION_CONSISTENT
 
 
 class RecallResult(BaseModel):
     items: List[MemoryRecord] = Field(default_factory=list)
     watermarks: Dict[str, int] = Field(default_factory=dict)
-    consistency: str = "session_consistent"
+    consistency: ConsistencyMode = ConsistencyMode.SESSION_CONSISTENT
     degraded: bool = False
 
 

@@ -5,6 +5,7 @@ from pydantic import ValidationError
 
 from memweave.models import (
     AuthContext,
+    ConsistencyMode,
     Event,
     EventType,
     MemoryKind,
@@ -87,6 +88,25 @@ def test_event_carries_protocol_metadata_and_payload():
 
     assert event.stream_id == "session:1"
     assert event.payload["text"] == "remember PostgreSQL"
+
+
+def test_event_accepts_extension_event_type():
+    event = Event(
+        event_id=uuid4(),
+        event_type="code.test_failed",
+        stream_id="session:1",
+        seq=2,
+        actor="agent:codex",
+        payload={"exit_code": 1},
+    )
+
+    assert event.event_type == "code.test_failed"
+
+
+def test_consistency_modes_are_stable_protocol_values():
+    assert ConsistencyMode.EVENTUAL.value == "eventual"
+    assert ConsistencyMode.SESSION_CONSISTENT.value == "session_consistent"
+    assert ConsistencyMode.DURABLE_CONSISTENT.value == "durable_consistent"
 
 
 def test_auth_context_requires_tenant_and_user_identity():
