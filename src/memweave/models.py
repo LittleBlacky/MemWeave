@@ -1,6 +1,7 @@
 """Domain models shared by the memory core and all adapters."""
 
 from enum import Enum
+from datetime import datetime
 from typing import Any, Dict, List, Optional, Set
 from uuid import UUID, uuid4
 
@@ -93,7 +94,10 @@ class Event(BaseModel):
     protocol_version: str = "1.0"
     request_id: UUID = Field(default_factory=uuid4)
     idempotency_key: Optional[str] = None
-    occurred_at: Any = Field(default_factory=utc_now)
+    occurred_at: datetime = Field(default_factory=utc_now)
+    ingested_at: datetime = Field(default_factory=utc_now)
+    causation_id: Optional[UUID] = None
+    correlation_id: Optional[UUID] = None
 
 
 class MemoryRecord(BaseModel):
@@ -110,8 +114,8 @@ class MemoryRecord(BaseModel):
     source: MemorySource
     source_seq: int = Field(ge=1)
     version: int = Field(ge=1)
-    created_at: Any = Field(default_factory=utc_now)
-    updated_at: Any = Field(default_factory=utc_now)
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
 
 
 class MemoryOperation(BaseModel):
