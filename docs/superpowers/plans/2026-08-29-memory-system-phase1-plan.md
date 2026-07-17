@@ -10,6 +10,8 @@
 
 **Spec:** docs/superpowers/specs/2026-08-29-memory-system-design.md
 
+**Development logs:** Each task must create or update `docs/superpowers/logs/YYYY-MM-DD-taskN-<name>.md`, recording scope, decisions, TDD red/green evidence, verification commands, commit hash, and known risks. The log is part of the task deliverable.
+
 ## Global Constraints
 
 - The immutable event log is the source of truth; session, durable, and search data are projections.
@@ -61,6 +63,10 @@ tests/
   test_tools_adapter.py
   test_http_api.py
   test_phase1_integration.py
+docs/superpowers/logs/
+  2026-08-29-task1-protocol-models.md
+  2026-08-29-task2-event-authority.md
+  2026-08-29-task3-session-projection.md
 ```
 
 ## Task 1: Project Skeleton, Domain Models, and Protocol Envelopes
