@@ -39,3 +39,25 @@ git diff --check
 - 当前只完成事件权威层，没有 Session Projection、Durable Projection 或 Outbox。
 - `:memory:` SQLite 多连接场景尚未作为第一阶段目标；当前测试和推荐用法使用文件数据库。
 - 事件 payload 的业务 Schema 校验和事件处理器注册将在后续任务实现。
+
+## 存储扩展架构修订
+
+根据多数据库协同需求，Task 2 后续修订为“Storage Ports, Migrations, and Event Authority”：
+
+- 引入 SQLAlchemy Core 2.x，避免事件领域逻辑依赖 `sqlite3.Connection`。
+- 将核心 DDL 移到 `migrations/0001_core.sql`，通过 `MigrationRunner` 记录并幂等执行版本。
+- `SQLiteDatabase` 负责 SQLite WAL、busy timeout 和 `BEGIN IMMEDIATE`；`db.Database` 保留为兼容入口。
+- 增加 `RelationalDatabase`、`EventRepository`、`ProjectionBackend`、`VectorIndex`、`GraphStore` 和 `KeywordIndex` 端口。
+- 增加 `StorageCoordinator`，支持多个投影后端独立 watermark 和失败隔离，不使用跨数据库两阶段提交。
+- `EventStore` 改用 SQLAlchemy Connection 的显式事务接口，原有序号、幂等和不可变语义保持不变。
+
+修订后验证：
+
+```text
+G:\\Anaconda\\envs\\smallshrimp\\python.exe -m pytest tests -q
+19 passed
+G:\\Anaconda\\envs\\smallshrimp\\python.exe -m compileall -q src
+git diff --check
+```
+
+修订提交：`60abdb8 feat: add extensible storage ports and event authority`

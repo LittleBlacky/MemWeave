@@ -1,9 +1,8 @@
-"""Append-only event store backed by SQLite."""
+"""Append-only event repository backed by a relational database adapter."""
 
 import json
-import sqlite3
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Mapping, Optional
 from uuid import UUID, uuid4
 
 from .clock import utc_now
@@ -46,10 +45,10 @@ class EventStore:
         event_type_value = event_type.value if isinstance(event_type, EventType) else event_type
         payload_json = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=_json_default)
 
-        with self.database.transaction() as connection:
-            existing = connection.execute(
+        with self.database.begin() as connection:
+            existing = connection.exec_driver_sql(
                 "SELECT * FROM events WHERE event_id = ?", (str(event_id),)
-            ).fetchone()
+            ).mappings().fetchone()
             if existing is not None:
                 if not self._matches_existing(
                     existing,
@@ -66,10 +65,10 @@ class EventStore:
                 return self._row_to_event(existing)
 
             if idempotency_key is not None:
-                duplicate = connection.execute(
+                duplicate = connection.exec_driver_sql(
                     "SELECT * FROM events WHERE stream_id = ? AND idempotency_key = ?",
                     (stream_id, idempotency_key),
-                ).fetchone()
+                ).mappings().fetchone()
                 if duplicate is not None:
                     if not self._matches_existing(
                         duplicate,
@@ -85,23 +84,23 @@ class EventStore:
                         raise ValueError("idempotency key conflicts with existing event")
                     return self._row_to_event(duplicate)
 
-            head = connection.execute(
+            head = connection.exec_driver_sql(
                 "SELECT last_seq FROM stream_heads WHERE stream_id = ?", (stream_id,)
-            ).fetchone()
+            ).mappings().fetchone()
             seq = (head["last_seq"] if head else 0) + 1
             if head is None:
-                connection.execute(
+                connection.exec_driver_sql(
                     "INSERT INTO stream_heads(stream_id, last_seq) VALUES (?, ?)",
                     (stream_id, seq),
                 )
             else:
-                connection.execute(
+                connection.exec_driver_sql(
                     "UPDATE stream_heads SET last_seq = ? WHERE stream_id = ?",
                     (seq, stream_id),
                 )
 
             ingested_at = utc_now()
-            connection.execute(
+            connection.exec_driver_sql(
                 """
                 INSERT INTO events (
                     event_id, stream_id, seq, event_type, actor, payload_json,
@@ -127,29 +126,29 @@ class EventStore:
                 ),
             )
 
-            row = connection.execute(
+            row = connection.exec_driver_sql(
                 "SELECT * FROM events WHERE event_id = ?", (str(event_id),)
-            ).fetchone()
+            ).mappings().fetchone()
             return self._row_to_event(row)
 
     def list_after(self, stream_id: str, seq: int) -> list[Event]:
         with self.database.read() as connection:
-            rows = connection.execute(
+            rows = connection.exec_driver_sql(
                 "SELECT * FROM events WHERE stream_id = ? AND seq > ? ORDER BY seq",
                 (stream_id, seq),
-            ).fetchall()
+            ).mappings().fetchall()
         return [self._row_to_event(row) for row in rows]
 
     def last_seq(self, stream_id: str) -> int:
         with self.database.read() as connection:
-            row = connection.execute(
+            row = connection.exec_driver_sql(
                 "SELECT last_seq FROM stream_heads WHERE stream_id = ?", (stream_id,)
-            ).fetchone()
+            ).mappings().fetchone()
         return int(row["last_seq"]) if row else 0
 
     @staticmethod
     def _matches_existing(
-        row: sqlite3.Row,
+        row: Mapping[str, Any],
         *,
         stream_id: str,
         event_type: str,
@@ -172,7 +171,7 @@ class EventStore:
         )
 
     @staticmethod
-    def _row_to_event(row: sqlite3.Row) -> Event:
+    def _row_to_event(row: Mapping[str, Any]) -> Event:
         return Event(
             event_id=UUID(row["event_id"]),
             event_type=row["event_type"],
