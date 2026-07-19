@@ -4,9 +4,9 @@
 
 **Goal:** Deliver a transport-neutral Memory Core plus reference L1 Middleware and L3 Tools/MCP adapters that can add reliable memory to an existing Agent without owning its runtime loop.
 
-**Architecture:** The Core is an event-sourced Python library behind explicit ports for events, session projection, durable memory, recall, policy, and jobs. A versioned Memory Protocol translates host-specific lifecycle signals into Core requests. L1 automates recall and synchronous explicit writes through hooks; L3 exposes the same operations as governed tools. L2 API Proxy is specified but deferred.
+**Architecture:** The Core is an event-sourced Python library behind explicit ports for events, relational authority, session state, durable memory, vector/graph/keyword indexes, recall, policy, and jobs. A versioned Memory Protocol translates host-specific lifecycle signals into Core requests. L1 automates recall and synchronous explicit writes through hooks; L3 exposes the same operations as governed tools. Multiple backends are coordinated through an Outbox rather than a distributed transaction; L2 API Proxy is specified but deferred.
 
-**Tech Stack:** Python 3.11+, Pydantic v2, SQLite WAL, FastAPI, pytest, anyio, and standard-library asyncio/threading for the local worker.
+**Tech Stack:** Python 3.11+, Pydantic v2, SQLAlchemy Core 2.x, versioned SQL migrations, SQLite WAL, FastAPI, pytest, anyio, and standard-library asyncio/threading for the local worker.
 
 **Spec:** docs/superpowers/specs/2026-08-29-memory-system-design.md
 
@@ -22,6 +22,7 @@
 - Ordinary extraction and indexing are asynchronous, retryable, idempotent, and recoverable from the event log.
 - Memory data cannot override system instructions, tool permissions, or adapter capabilities.
 - Phase 1 implements text and structured values, deterministic recall, L1 and L3; vector, graph, LLM extraction, L2 proxy and automatic policy evolution remain later work.
+- Phase 1 implements a SQLite relational adapter and defines ports for simultaneous vector, graph, keyword, KV, and blob backends; concrete external index adapters remain later work.
 
 ---
 
@@ -34,7 +35,15 @@ src/memweave/
   models.py                # domain and protocol Pydantic models
   errors.py                # typed protocol/domain errors
   clock.py                 # injectable UTC clock
-  db.py                    # SQLite schema and transactions
+  storage/
+    ports.py               # relational/index/blob storage contracts
+    coordinator.py         # multi-backend routing and projection coordination
+    sqlalchemy.py          # SQLAlchemy Core relational implementation
+    sqlite.py              # SQLite-specific engine settings
+    migrations.py          # versioned migration runner
+    vector.py              # vector index contract
+    graph.py               # graph store contract
+    keyword.py             # keyword index contract
   events.py                # append-only event store
   session.py               # session projection and working memory
   durable.py               # durable memory authority and CAS resolver
@@ -50,6 +59,8 @@ src/memweave/
     tools.py               # governed memory tool definitions and dispatcher
   http_api.py              # FastAPI adapter for Core and protocol endpoints
   worker.py                # local outbox worker
+migrations/
+  0001_core.sql            # events, stream heads, projection watermarks
 tests/
   conftest.py
   test_models.py
@@ -93,23 +104,35 @@ docs/superpowers/logs/
 - [ ] **Step 4: Run the focused tests** and verify all pass.
 - [ ] **Step 5: Commit** with `feat: define memory protocol and domain models`.
 
-## Task 2: SQLite Authority and Append-Only Event Store
+## Task 2: Storage Ports, Migrations, and Event Authority
 
 **Files:**
-- Create: `src/memweave/db.py`
+- Create: `src/memweave/storage/ports.py`
+- Create: `src/memweave/storage/coordinator.py`
+- Create: `src/memweave/storage/sqlalchemy.py`
+- Create: `src/memweave/storage/sqlite.py`
+- Create: `src/memweave/storage/migrations.py`
+- Create: `src/memweave/storage/vector.py`
+- Create: `src/memweave/storage/graph.py`
+- Create: `src/memweave/storage/keyword.py`
+- Create: `migrations/0001_core.sql`
 - Create: `src/memweave/events.py`
-- Test: `tests/test_events.py`
+- Modify: `pyproject.toml`
+- Test: `tests/test_storage_ports.py`, `tests/test_events.py`
 
 **Interfaces:**
-- `Database(path: str)` and `Database.transaction()`.
-- `EventStore.append(stream_id, event_type, payload, actor, request_id, event_id=None, occurred_at=None, causation_id=None, correlation_id=None) -> Event`.
-- `EventStore.list_after(stream_id, seq) -> list[Event]`; `EventStore.last_seq(stream_id) -> int`.
+- `RelationalDatabase.begin()`, `RelationalDatabase.read()`, and `RelationalDatabase.apply_migrations()`.
+- `EventRepository.append(...) -> Event`; `list_after(stream_id, seq) -> list[Event]`; `last_seq(stream_id) -> int`.
+- `StorageCoordinator.register_backend(backend)`, `project(event)`, and `watermarks() -> dict[str, int]`.
+- `VectorIndex`, `GraphStore`, and `KeywordIndex` are ports with `upsert`, `delete`, and health/watermark methods; Phase 1 provides no external concrete index implementation.
 
-- [ ] **Step 1: Write failing tests** for sequence allocation, duplicate event idempotency, concurrent writers, protocol metadata persistence, and immutable payload retrieval.
-- [ ] **Step 2: Run `python -m pytest tests/test_events.py -q`** and verify failure.
-- [ ] **Step 3: Implement SQLite WAL schema** for events, stream heads, projection watermarks, and request idempotency; allocate stream sequence under a write transaction and reject payload mutation.
-- [ ] **Step 4: Run the event tests** including a two-thread append stress case.
-- [ ] **Step 5: Commit** with `feat: add transactional event authority`.
+- [ ] **Step 1: Write failing tests** for storage-port registration, migration versioning, sequence allocation, duplicate event idempotency, concurrent writers, protocol metadata persistence, and immutable payload retrieval.
+- [ ] **Step 2: Run `python -m pytest tests/test_storage_ports.py tests/test_events.py -q`** and verify failure because the storage ports and migration runner do not exist.
+- [ ] **Step 3: Add SQLAlchemy Core 2.x and implement the relational ports**; move the core DDL to `migrations/0001_core.sql`, keep SQLite WAL/busy-timeout settings in `sqlite.py`, and make `EventRepository` use explicit transactions without ORM entities.
+- [ ] **Step 4: Implement `StorageCoordinator`** so one committed event can be fanned out to multiple registered projection backends with independent watermarks and no cross-database two-phase commit.
+- [ ] **Step 5: Run storage and event tests** including a two-thread append stress case, migration rerun, backend failure isolation, and projection watermark checks.
+- [ ] **Step 6: Update `docs/superpowers/logs/2026-08-29-task2-event-authority.md`** with the storage-boundary revision, test evidence, and final commit hash.
+- [ ] **Step 7: Commit** with `feat: add extensible storage ports and event authority`.
 
 ## Task 3: Session Projection and Explicit Command Policy
 

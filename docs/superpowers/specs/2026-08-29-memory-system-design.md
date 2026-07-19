@@ -34,7 +34,20 @@
 Agent 集成：Middleware + Context Provider + 受控 Tools/MCP
 ```
 
-第一版建议使用 SQLite 或 PostgreSQL 保存事件、会话状态、长期权威表和经验元数据；向量索引通过可插拔适配器接入，图索引作为后续插件。队列先支持进程内/本地实现，接口保持可替换为 Redis Streams 或 Kafka。
+第一版使用 SQLite 作为关系型权威存储的本地实现；生产部署可使用 PostgreSQL 或其他关系数据库。会话、长期记忆、向量、关键词和图数据可以同时落在不同后端，但必须通过统一存储端口和投影协调器接入。队列先支持进程内/本地实现，接口保持可替换为 Redis Streams 或 Kafka。
+
+记忆层采用多数据库协同，而不是单一数据库替换：
+
+```text
+事件日志/权威记忆：SQLite、PostgreSQL 或 MySQL
+会话热点状态：关系库、Redis 或其他 KV Store
+语义检索：Qdrant、Milvus、pgvector 等 Vector Index
+关系检索：Neo4j、NebulaGraph、AGE 等 Graph Store
+关键词检索：关系库 FTS、OpenSearch 等 Keyword Index
+大对象：S3、MinIO 或本地对象存储
+```
+
+事件日志和关系型长期记忆是权威数据；向量、图、关键词和热点状态是可重建投影。一次写入先提交权威事务，再通过 Outbox 并行更新多个派生后端，不使用跨数据库两阶段提交。每个投影独立维护 watermark、重试状态和健康信息。
 
 ## 3. 记忆对象模型
 
@@ -112,11 +125,13 @@ needs_confirmation
 
 同一 `stream_id` 内 `seq` 严格递增，`event_id` 全局唯一，事件追加后不可修改。
 
-### 4.2 三类投影
+### 4.2 投影和存储平面
 
 - **Session Projection**：同步维护当前会话工作记忆和最近上下文。
 - **Durable Projection**：长期事实、经验和版本状态的权威投影。
-- **Search Projection**：向量、关键词和图索引，属于可重建派生数据。
+- **Search Projection**：向量、关键词和图索引，属于可重建派生数据，可以同时写入多个后端。
+
+投影不等于数据库。一个投影可以使用多个数据库，一个数据库也可以承载多个投影；Core 通过存储端口和 `StorageCoordinator` 管理这种组合。
 
 ### 4.3 水位、版本和幂等
 
@@ -164,7 +179,7 @@ needs_confirmation
 
 ## 7. 一致性、队列与恢复
 
-一轮请求内的事务至少包含：写入原始事件、更新会话投影、记录显式操作、写入 outbox。事务提交后才向客户端返回，后台 Worker 从 outbox 投递异步任务。
+一轮请求内的权威事务至少包含：写入原始事件、更新会话投影、记录显式操作、写入 outbox。事务提交后才向客户端返回，后台 Worker 从 outbox 并行投递到向量、图、关键词、KV 和对象存储；不要求这些派生后端参与同一个分布式事务。
 
 读取支持 `eventual`、`session_consistent`、`durable_consistent` 三种模式，默认 `session_consistent`。等待长期水位超时后，使用会话投影并标记 `durable_lag=true`，不无限阻塞 Agent。
 
@@ -176,12 +191,39 @@ needs_confirmation
 
 ```text
 EventStore / SessionStore / DurableMemoryStore
-RecallProvider / Extractor / Resolver / PolicyEngine / JobQueue
+VectorIndex / GraphStore / KeywordIndex / BlobStore
+StorageCoordinator / RecallProvider / Extractor / Resolver / PolicyEngine / JobQueue
 ```
 
 SDK 与独立服务共享领域模型，核心 API 包括：`append_event`、`recall`、`remember`、`forget`、`get`、`list`、`confirm`、`rebuild_index`。Agent 集成提供 Middleware、Context Provider 和 Tools/MCP 三种方式，默认启用 Middleware + Context Provider。
 
 插件边界包括 MemoryKind、Extractor、Recall、Policy、Source Adapter、Index Adapter 和 Lifecycle Hook。插件不能绕过事件日志、权限、版本和审计。不同场景通过策略配置实现，不复制核心代码。
+
+### 8.5 多数据库协同和存储扩展
+
+`StorageCoordinator` 负责将一条权威记忆分发到多个存储后端，但不把这些后端混为一个事务。其最小能力包括：注册/注销后端、按记忆种类和作用域路由、写入 Outbox、读取各后端 watermark、报告健康状态，以及在索引损坏时从权威表重建。
+
+推荐的职责边界如下：
+
+| 存储端口 | 默认角色 | 一致性 | 可否作为唯一真相 |
+| --- | --- | --- | --- |
+| `EventStore` | 原始事件 | 提交后不可变 | 是 |
+| `DurableMemoryStore` | 长期记忆、版本、tombstone | durable/session consistent | 是（记忆状态） |
+| `SessionStore` | 当前会话工作状态 | session consistent | 仅当前会话 |
+| `VectorIndex` | 语义发现 | 最终一致 | 否 |
+| `GraphStore` | 关系和多跳发现 | 最终一致 | 否 |
+| `KeywordIndex` | 精确/全文发现 | 最终一致 | 否 |
+| `BlobStore` | 大文本和文件引用 | 最终一致或外部权威 | 由来源策略决定 |
+
+一次记忆写入的标准流程是：
+
+```text
+权威事件 + Durable Memory + Outbox（同一事务）
+                         ↓
+       Vector / Graph / Keyword / KV / Blob 并行投影
+```
+
+召回必须在合并向量或图结果后回查作用域、版本和 tombstone；任何派生后端不可用时，系统仍可从 Session Projection 和 Durable Projection 返回降级结果。
 
 ### 8.1 框架无关 Memory Protocol
 
