@@ -1,6 +1,9 @@
+from concurrent.futures import ThreadPoolExecutor
 from uuid import uuid4
 
+from memweave.events import EventStore
 from memweave.models import Event
+from memweave.models import EventType
 from memweave.storage.coordinator import StorageCoordinator
 from memweave.storage.ports import ProjectionBackend
 from memweave.storage.sqlalchemy import SQLAlchemyDatabase
@@ -37,6 +40,26 @@ def test_generic_sqlalchemy_database_can_apply_core_migration(tmp_path):
     assert database.applied_migrations() == ["0001_core"]
     assert database.apply_migrations() == []
     assert database.applied_migrations() == ["0001_core"]
+
+
+def test_generic_sqlalchemy_database_serializes_concurrent_event_appends(tmp_path):
+    database = SQLAlchemyDatabase(f"sqlite+pysqlite:///{tmp_path / 'concurrent-generic.db'}")
+    database.apply_migrations()
+    store = EventStore(database)
+
+    def append_one(index):
+        return store.append(
+            "session:generic-concurrent",
+            EventType.TOOL_COMPLETED,
+            {"index": index},
+            "agent:a1",
+            request_id=uuid4(),
+        ).seq
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        sequences = list(executor.map(append_one, range(20)))
+
+    assert sorted(sequences) == list(range(1, 21))
 
 
 def test_storage_coordinator_projects_to_multiple_backends():

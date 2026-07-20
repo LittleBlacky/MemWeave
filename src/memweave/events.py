@@ -1,11 +1,13 @@
 """Append-only event repository backed by a relational database adapter."""
 
 import json
+import time
 from datetime import datetime
 from typing import Any, Dict, Mapping, Optional
 from uuid import UUID, uuid4
 
 from sqlalchemy import insert, select, update
+from sqlalchemy.exc import IntegrityError, OperationalError
 
 from .clock import utc_now
 from .db import Database
@@ -20,8 +22,11 @@ def _json_default(value: Any) -> str:
 
 
 class EventStore:
-    def __init__(self, database: Database):
+    def __init__(self, database: Database, max_append_retries: int = 8):
+        if max_append_retries < 0:
+            raise ValueError("max_append_retries must not be negative")
         self.database = database
+        self.max_append_retries = max_append_retries
 
     def append(
         self,
@@ -58,6 +63,43 @@ class EventStore:
             "correlation_id": str(correlation_id) if correlation_id else None,
         }
 
+        for attempt in range(self.max_append_retries + 1):
+            try:
+                return self._append_once(
+                    stream_id=stream_id,
+                    event_id=event_id,
+                    event_type_value=event_type_value,
+                    payload_json=payload_json,
+                    actor=actor,
+                    request_id=request_id,
+                    occurred_at=occurred_at,
+                    causation_id=causation_id,
+                    correlation_id=correlation_id,
+                    idempotency_key=idempotency_key,
+                    immutable_values=immutable_values,
+                )
+            except (IntegrityError, OperationalError) as exc:
+                if attempt >= self.max_append_retries or not self._is_retryable(exc):
+                    raise
+                time.sleep(0.005 * (2**attempt))
+
+        raise AssertionError("unreachable")
+
+    def _append_once(
+        self,
+        *,
+        stream_id: str,
+        event_id: UUID,
+        event_type_value: str,
+        payload_json: str,
+        actor: str,
+        request_id: UUID,
+        occurred_at: datetime,
+        causation_id: Optional[UUID],
+        correlation_id: Optional[UUID],
+        idempotency_key: Optional[str],
+        immutable_values: Mapping[str, Any],
+    ) -> Event:
         with self.database.begin() as connection:
             existing = connection.execute(
                 select(events_table).where(events_table.c.event_id == str(event_id))
@@ -119,6 +161,23 @@ class EventStore:
                 select(events_table).where(events_table.c.event_id == str(event_id))
             ).mappings().one()
             return self._row_to_event(row)
+
+    @staticmethod
+    def _is_retryable(error: Exception) -> bool:
+        if isinstance(error, IntegrityError):
+            return True
+        if isinstance(error, OperationalError):
+            message = str(error).lower()
+            return any(
+                marker in message
+                for marker in (
+                    "database is locked",
+                    "deadlock",
+                    "serialization failure",
+                    "could not serialize",
+                )
+            )
+        return False
 
     def list_after(self, stream_id: str, seq: int) -> list[Event]:
         with self.database.read() as connection:
