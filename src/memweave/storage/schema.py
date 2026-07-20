@@ -1,0 +1,50 @@
+"""SQLAlchemy Core table metadata for the relational authority."""
+
+from sqlalchemy import Column, Integer, MetaData, String, Table, Text, UniqueConstraint
+
+
+metadata = MetaData()
+
+events_table = Table(
+    "events",
+    metadata,
+    Column("event_id", String(36), primary_key=True),
+    Column("stream_id", String(255), nullable=False),
+    Column("seq", Integer, nullable=False),
+    Column("event_type", String(255), nullable=False),
+    Column("actor", String(255), nullable=False),
+    Column("payload_json", Text, nullable=False),
+    Column("schema_version", Integer, nullable=False),
+    Column("protocol_version", String(32), nullable=False),
+    Column("request_id", String(36), nullable=False),
+    Column("idempotency_key", String(512)),
+    Column("occurred_at", String(64), nullable=False),
+    Column("ingested_at", String(64), nullable=False),
+    Column("causation_id", String(36)),
+    Column("correlation_id", String(36)),
+    UniqueConstraint("stream_id", "seq", name="uq_events_stream_seq"),
+)
+
+stream_heads_table = Table(
+    "stream_heads",
+    metadata,
+    Column("stream_id", String(255), primary_key=True),
+    Column("last_seq", Integer, nullable=False),
+)
+
+projection_watermarks_table = Table(
+    "projection_watermarks",
+    metadata,
+    Column("projection", String(255), nullable=False),
+    Column("stream_id", String(255), nullable=False),
+    Column("last_seq", Integer, nullable=False),
+    UniqueConstraint("projection", "stream_id", name="pk_projection_watermarks"),
+)
+
+schema_migrations_table = Table(
+    "schema_migrations",
+    metadata,
+    Column("version", String(255), primary_key=True),
+    Column("applied_at", String(64), nullable=False),
+)
+

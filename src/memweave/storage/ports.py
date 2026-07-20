@@ -2,16 +2,14 @@
 
 from typing import Any, ContextManager, Dict, Protocol, runtime_checkable
 
-from sqlalchemy.engine import Connection
-
 from ..models import Event
 
 
 class RelationalDatabase(Protocol):
-    def begin(self) -> ContextManager[Connection]:
+    def begin(self) -> ContextManager[Any]:
         ...
 
-    def read(self) -> ContextManager[Connection]:
+    def read(self) -> ContextManager[Any]:
         ...
 
     def apply_migrations(self) -> list[str]:

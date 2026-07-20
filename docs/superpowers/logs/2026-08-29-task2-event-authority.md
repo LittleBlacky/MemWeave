@@ -61,3 +61,17 @@ git diff --check
 ```
 
 修订提交：`60abdb8 feat: add extensible storage ports and event authority`
+
+## 代码审查修订
+
+审查发现上一版虽然引入了 SQLAlchemy，但 `events.py` 仍通过 `exec_driver_sql` 直接拼接 SQLite 风格 SQL，无法充分利用数据库方言抽象。该问题已修正：
+
+- 新增 `storage/schema.py`，以 SQLAlchemy Core `Table` 定义关系表元数据。
+- `events.py` 的查询、插入和更新改为 `select`、`insert`、`update` 构造，不再包含运行时 SQL 字符串。
+- `ports.py` 不再暴露 SQLAlchemy `Connection` 类型，关系数据库端口保持基础设施无关。
+- 保留的 `exec_driver_sql` 仅用于执行外部迁移脚本；SQLite 专属 PRAGMA 和 `BEGIN IMMEDIATE` 保留在 SQLite Adapter 内。
+- 增加通用 `SQLAlchemyDatabase` 使用 SQLite URL 执行核心迁移的契约测试。
+
+该修订验证：8 个存储/事件测试通过；随后全量已提交测试仍通过。
+
+最终修订提交：`ca50c89 refactor: remove runtime sql from event repository`

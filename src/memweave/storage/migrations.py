@@ -1,10 +1,13 @@
 """Versioned SQL migration runner."""
 
 from pathlib import Path
+from datetime import datetime, timezone
 from typing import Iterable, List
 
+from sqlalchemy import insert, select
 from sqlalchemy.engine import Connection
 
+from .schema import schema_migrations_table
 
 class MigrationRunner:
     def __init__(self, directory: str):
@@ -14,14 +17,11 @@ class MigrationRunner:
         return sorted(self.directory.glob("[0-9][0-9][0-9][0-9]_*.sql"))
 
     def apply(self, connection: Connection) -> List[str]:
-        connection.exec_driver_sql(
-            "CREATE TABLE IF NOT EXISTS schema_migrations "
-            "(version TEXT PRIMARY KEY, applied_at TEXT NOT NULL)"
-        )
+        schema_migrations_table.create(connection, checkfirst=True)
         applied = {
             row[0]
-            for row in connection.exec_driver_sql(
-                "SELECT version FROM schema_migrations ORDER BY version"
+            for row in connection.execute(
+                select(schema_migrations_table.c.version).order_by(schema_migrations_table.c.version)
             ).fetchall()
         }
         applied_now: List[str] = []
@@ -34,17 +34,19 @@ class MigrationRunner:
                 statement = statement.strip()
                 if statement:
                     connection.exec_driver_sql(statement)
-            connection.exec_driver_sql(
-                "INSERT INTO schema_migrations(version, applied_at) VALUES (?, CURRENT_TIMESTAMP)",
-                (version,),
+            connection.execute(
+                insert(schema_migrations_table).values(
+                    version=version,
+                    applied_at=datetime.now(timezone.utc).isoformat(),
+                )
             )
             applied_now.append(version)
         return applied_now
 
     def applied(self, connection: Connection) -> List[str]:
         try:
-            rows = connection.exec_driver_sql(
-                "SELECT version FROM schema_migrations ORDER BY version"
+            rows = connection.execute(
+                select(schema_migrations_table.c.version).order_by(schema_migrations_table.c.version)
             ).fetchall()
         except Exception:
             return []

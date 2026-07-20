@@ -5,9 +5,12 @@ from datetime import datetime
 from typing import Any, Dict, Mapping, Optional
 from uuid import UUID, uuid4
 
+from sqlalchemy import insert, select, update
+
 from .clock import utc_now
 from .db import Database
 from .models import Event, EventType
+from .storage.schema import events_table, stream_heads_table
 
 
 def _json_default(value: Any) -> str:
@@ -44,131 +47,100 @@ class EventStore:
         occurred_at = occurred_at or utc_now()
         event_type_value = event_type.value if isinstance(event_type, EventType) else event_type
         payload_json = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=_json_default)
+        immutable_values = {
+            "stream_id": stream_id,
+            "event_type": event_type_value,
+            "payload_json": payload_json,
+            "actor": actor,
+            "request_id": str(request_id),
+            "idempotency_key": idempotency_key,
+            "causation_id": str(causation_id) if causation_id else None,
+            "correlation_id": str(correlation_id) if correlation_id else None,
+        }
 
         with self.database.begin() as connection:
-            existing = connection.exec_driver_sql(
-                "SELECT * FROM events WHERE event_id = ?", (str(event_id),)
-            ).mappings().fetchone()
+            existing = connection.execute(
+                select(events_table).where(events_table.c.event_id == str(event_id))
+            ).mappings().first()
             if existing is not None:
-                if not self._matches_existing(
-                    existing,
-                    stream_id=stream_id,
-                    event_type=event_type_value,
-                    payload_json=payload_json,
-                    actor=actor,
-                    request_id=request_id,
-                    idempotency_key=idempotency_key,
-                    causation_id=causation_id,
-                    correlation_id=correlation_id,
-                ):
+                if not self._matches_existing(existing, immutable_values):
                     raise ValueError("event is immutable")
                 return self._row_to_event(existing)
 
             if idempotency_key is not None:
-                duplicate = connection.exec_driver_sql(
-                    "SELECT * FROM events WHERE stream_id = ? AND idempotency_key = ?",
-                    (stream_id, idempotency_key),
-                ).mappings().fetchone()
+                duplicate = connection.execute(
+                    select(events_table).where(
+                        events_table.c.stream_id == stream_id,
+                        events_table.c.idempotency_key == idempotency_key,
+                    )
+                ).mappings().first()
                 if duplicate is not None:
-                    if not self._matches_existing(
-                        duplicate,
-                        stream_id=stream_id,
-                        event_type=event_type_value,
-                        payload_json=payload_json,
-                        actor=actor,
-                        request_id=request_id,
-                        idempotency_key=idempotency_key,
-                        causation_id=causation_id,
-                        correlation_id=correlation_id,
-                    ):
+                    if not self._matches_existing(duplicate, immutable_values):
                         raise ValueError("idempotency key conflicts with existing event")
                     return self._row_to_event(duplicate)
 
-            head = connection.exec_driver_sql(
-                "SELECT last_seq FROM stream_heads WHERE stream_id = ?", (stream_id,)
-            ).mappings().fetchone()
-            seq = (head["last_seq"] if head else 0) + 1
+            head = connection.execute(
+                select(stream_heads_table.c.last_seq).where(
+                    stream_heads_table.c.stream_id == stream_id
+                )
+            ).scalar_one_or_none()
+            seq = (head or 0) + 1
             if head is None:
-                connection.exec_driver_sql(
-                    "INSERT INTO stream_heads(stream_id, last_seq) VALUES (?, ?)",
-                    (stream_id, seq),
+                connection.execute(
+                    insert(stream_heads_table).values(stream_id=stream_id, last_seq=seq)
                 )
             else:
-                connection.exec_driver_sql(
-                    "UPDATE stream_heads SET last_seq = ? WHERE stream_id = ?",
-                    (seq, stream_id),
+                connection.execute(
+                    update(stream_heads_table)
+                    .where(stream_heads_table.c.stream_id == stream_id)
+                    .values(last_seq=seq)
                 )
 
             ingested_at = utc_now()
-            connection.exec_driver_sql(
-                """
-                INSERT INTO events (
-                    event_id, stream_id, seq, event_type, actor, payload_json,
-                    schema_version, protocol_version, request_id, idempotency_key,
-                    occurred_at, ingested_at, causation_id, correlation_id
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    str(event_id),
-                    stream_id,
-                    seq,
-                    event_type_value,
-                    actor,
-                    payload_json,
-                    1,
-                    "1.0",
-                    str(request_id),
-                    idempotency_key,
-                    occurred_at.isoformat(),
-                    ingested_at.isoformat(),
-                    str(causation_id) if causation_id else None,
-                    str(correlation_id) if correlation_id else None,
-                ),
+            connection.execute(
+                insert(events_table).values(
+                    event_id=str(event_id),
+                    stream_id=stream_id,
+                    seq=seq,
+                    event_type=event_type_value,
+                    actor=actor,
+                    payload_json=payload_json,
+                    schema_version=1,
+                    protocol_version="1.0",
+                    request_id=str(request_id),
+                    idempotency_key=idempotency_key,
+                    occurred_at=occurred_at.isoformat(),
+                    ingested_at=ingested_at.isoformat(),
+                    causation_id=str(causation_id) if causation_id else None,
+                    correlation_id=str(correlation_id) if correlation_id else None,
+                )
             )
-
-            row = connection.exec_driver_sql(
-                "SELECT * FROM events WHERE event_id = ?", (str(event_id),)
-            ).mappings().fetchone()
+            row = connection.execute(
+                select(events_table).where(events_table.c.event_id == str(event_id))
+            ).mappings().one()
             return self._row_to_event(row)
 
     def list_after(self, stream_id: str, seq: int) -> list[Event]:
         with self.database.read() as connection:
-            rows = connection.exec_driver_sql(
-                "SELECT * FROM events WHERE stream_id = ? AND seq > ? ORDER BY seq",
-                (stream_id, seq),
-            ).mappings().fetchall()
+            rows = connection.execute(
+                select(events_table)
+                .where(events_table.c.stream_id == stream_id, events_table.c.seq > seq)
+                .order_by(events_table.c.seq)
+            ).mappings().all()
         return [self._row_to_event(row) for row in rows]
 
     def last_seq(self, stream_id: str) -> int:
         with self.database.read() as connection:
-            row = connection.exec_driver_sql(
-                "SELECT last_seq FROM stream_heads WHERE stream_id = ?", (stream_id,)
-            ).mappings().fetchone()
-        return int(row["last_seq"]) if row else 0
+            value = connection.execute(
+                select(stream_heads_table.c.last_seq).where(
+                    stream_heads_table.c.stream_id == stream_id
+                )
+            ).scalar_one_or_none()
+        return int(value or 0)
 
     @staticmethod
-    def _matches_existing(
-        row: Mapping[str, Any],
-        *,
-        stream_id: str,
-        event_type: str,
-        payload_json: str,
-        actor: str,
-        request_id: UUID,
-        idempotency_key: Optional[str],
-        causation_id: Optional[UUID],
-        correlation_id: Optional[UUID],
-    ) -> bool:
-        return (
-            row["stream_id"] == stream_id
-            and row["event_type"] == event_type
-            and row["payload_json"] == payload_json
-            and row["actor"] == actor
-            and row["request_id"] == str(request_id)
-            and row["idempotency_key"] == idempotency_key
-            and row["causation_id"] == (str(causation_id) if causation_id else None)
-            and row["correlation_id"] == (str(correlation_id) if correlation_id else None)
-        )
+    def _matches_existing(row: Mapping[str, Any], values: Mapping[str, Any]) -> bool:
+        return all(row[key] == value for key, value in values.items())
 
     @staticmethod
     def _row_to_event(row: Mapping[str, Any]) -> Event:
