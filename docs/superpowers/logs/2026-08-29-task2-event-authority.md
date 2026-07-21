@@ -74,4 +74,28 @@ git diff --check
 
 该修订验证：8 个存储/事件测试通过；随后全量已提交测试仍通过。
 
-最终修订提交：`ca50c89 refactor: remove runtime sql from event repository`
+最终修订提交：`c6a156d refactor: remove runtime sql from event repository`
+
+## 并发追加审查修订
+
+审查发现通用 `SQLAlchemyDatabase` 使用普通事务时，同一事件流的并发追加可能同时读取相同的 `last_seq`，导致 `stream_heads` 或 `events(stream_id, seq)` 唯一约束冲突。该问题在 SQLite 专用适配器的 `BEGIN IMMEDIATE` 路径之外仍然存在。
+
+修订内容：
+
+- 将单次事件追加封装为独立事务操作；
+- 对唯一约束竞争以及 SQLite 锁、数据库死锁和序列化失败进行有限指数退避重试；
+- 每次重试重新读取流头，不复用冲突事务中的序号；
+- 增加通用 SQLAlchemy SQLite URL 的 20 路并发追加契约测试。
+
+验证：
+
+```text
+G:\\Anaconda\\envs\\smallshrimp\\python.exe -m pytest tests/test_storage_ports.py::test_generic_sqlalchemy_database_serializes_concurrent_event_appends -q
+5 次连续运行通过
+G:\\Anaconda\\envs\\smallshrimp\\python.exe -m pytest tests/test_events.py tests/test_models.py tests/test_protocol.py tests/test_storage_ports.py -q
+21 passed
+G:\\Anaconda\\envs\\smallshrimp\\python.exe -m compileall -q src
+git diff --check
+```
+
+本次修订提交：`efcea0c fix: retry concurrent event sequence allocation`
