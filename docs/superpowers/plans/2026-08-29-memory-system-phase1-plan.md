@@ -6,7 +6,7 @@
 
 **Architecture:** The Core is an event-sourced Python library behind explicit ports for events, relational authority, session state, durable memory, vector/graph/keyword indexes, recall, policy, and jobs. A versioned Memory Protocol translates host-specific lifecycle signals into Core requests. L1 automates recall and synchronous explicit writes through hooks; L3 exposes the same operations as governed tools. Multiple backends are coordinated through an Outbox rather than a distributed transaction; L2 API Proxy is specified but deferred.
 
-**Tech Stack:** Python 3.11+, Pydantic v2, SQLAlchemy Core 2.x, versioned SQL migrations, SQLite WAL, FastAPI, pytest, anyio, and standard-library asyncio/threading for the local worker.
+**Tech Stack:** Python 3.11+, Pydantic v2, SQLAlchemy Core 2.x, versioned Python migrations, SQLite WAL, FastAPI, pytest, anyio, and standard-library asyncio/threading for the local worker.
 
 **Spec:** docs/superpowers/specs/2026-08-29-memory-system-design.md
 
@@ -60,7 +60,7 @@ src/memweave/
   http_api.py              # FastAPI adapter for Core and protocol endpoints
   worker.py                # local outbox worker
 migrations/
-  0001_core.sql            # events, stream heads, projection watermarks
+  0001_core.py             # events, stream heads, projection watermarks
 tests/
   conftest.py
   test_models.py
@@ -115,7 +115,7 @@ docs/superpowers/logs/
 - Create: `src/memweave/storage/vector.py`
 - Create: `src/memweave/storage/graph.py`
 - Create: `src/memweave/storage/keyword.py`
-- Create: `migrations/0001_core.sql`
+- Create: `migrations/0001_core.py`
 - Create: `src/memweave/events.py`
 - Modify: `pyproject.toml`
 - Test: `tests/test_storage_ports.py`, `tests/test_events.py`
@@ -128,7 +128,7 @@ docs/superpowers/logs/
 
 - [ ] **Step 1: Write failing tests** for storage-port registration, migration versioning, sequence allocation, duplicate event idempotency, concurrent writers, protocol metadata persistence, and immutable payload retrieval.
 - [ ] **Step 2: Run `python -m pytest tests/test_storage_ports.py tests/test_events.py -q`** and verify failure because the storage ports and migration runner do not exist.
-- [ ] **Step 3: Add SQLAlchemy Core 2.x and implement the relational ports**; move the core DDL to `migrations/0001_core.sql`, keep SQLite WAL/busy-timeout settings in `sqlite.py`, and make `EventRepository` use explicit transactions without ORM entities.
+- [ ] **Step 3: Add SQLAlchemy Core 2.x and implement the relational ports**; use a versioned Python migration in `migrations/0001_core.py` backed by the SQLAlchemy table definitions, keep SQLite WAL/busy-timeout settings in `sqlite.py`, and make `EventRepository` use explicit transactions without ORM entities.
 - [ ] **Step 4: Implement `StorageCoordinator`** so one committed event can be fanned out to multiple registered projection backends with independent watermarks and no cross-database two-phase commit.
 - [ ] **Step 5: Run storage and event tests** including a two-thread append stress case, migration rerun, backend failure isolation, and projection watermark checks.
 - [ ] **Step 6: Update `docs/superpowers/logs/2026-08-29-task2-event-authority.md`** with the storage-boundary revision, test evidence, and final commit hash.

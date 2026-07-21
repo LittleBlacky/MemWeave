@@ -23,6 +23,11 @@ events_table = Table(
     Column("causation_id", String(36)),
     Column("correlation_id", String(36)),
     UniqueConstraint("stream_id", "seq", name="uq_events_stream_seq"),
+    UniqueConstraint(
+        "stream_id",
+        "idempotency_key",
+        name="uq_events_stream_idempotency",
+    ),
 )
 
 stream_heads_table = Table(
@@ -47,4 +52,3 @@ schema_migrations_table = Table(
     Column("version", String(255), primary_key=True),
     Column("applied_at", String(64), nullable=False),
 )
-

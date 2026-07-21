@@ -1,6 +1,8 @@
 from concurrent.futures import ThreadPoolExecutor
 from uuid import uuid4
 
+from sqlalchemy import text
+
 from memweave.events import EventStore
 from memweave.models import Event
 from memweave.models import EventType
@@ -40,6 +42,27 @@ def test_generic_sqlalchemy_database_can_apply_core_migration(tmp_path):
     assert database.applied_migrations() == ["0001_core"]
     assert database.apply_migrations() == []
     assert database.applied_migrations() == ["0001_core"]
+
+
+def test_migration_runner_executes_python_migration_with_semicolons_in_values(tmp_path):
+    migration_dir = tmp_path / "migrations"
+    migration_dir.mkdir()
+    (migration_dir / "0001_complex.py").write_text(
+        "from sqlalchemy import text\n"
+        "\n"
+        "def upgrade(connection):\n"
+        "    connection.execute(text(\"CREATE TABLE notes (content TEXT NOT NULL)\"))\n"
+        "    connection.execute(text(\"INSERT INTO notes(content) VALUES ('remember; this')\"))\n",
+        encoding="utf-8",
+    )
+    database = SQLAlchemyDatabase(
+        f"sqlite+pysqlite:///{tmp_path / 'complex.db'}",
+        migration_dir=str(migration_dir),
+    )
+
+    assert database.apply_migrations() == ["0001_complex"]
+    with database.read() as connection:
+        assert connection.execute(text("SELECT content FROM notes")).scalar_one() == "remember; this"
 
 
 def test_generic_sqlalchemy_database_serializes_concurrent_event_appends(tmp_path):
