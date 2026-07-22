@@ -99,3 +99,26 @@ git diff --check
 ```
 
 本次修订提交：`efcea0c fix: retry concurrent event sequence allocation`
+
+## 迁移执行审查修订
+
+审查发现原迁移器使用 `script.split(";")` 拆分 SQL，无法正确处理字符串、触发器、函数体等包含分号的 SQL，也无法保证同一迁移文件在不同数据库方言下可执行。
+
+修订内容：
+
+- 删除文本迁移 `migrations/0001_core.sql`，改为版本化 Python migration `migrations/0001_core.py`；
+- `MigrationRunner` 加载并执行 `upgrade(connection)`，不再自行解析 SQL 文本；
+- 核心表和约束由 SQLAlchemy Core `schema.py` 定义，迁移只负责版本化演进；
+- 将事件幂等键约束纳入 SQLAlchemy 表定义，避免迁移定义与运行时定义分叉；
+- 增加自定义迁移测试，验证值 `remember; this` 中的分号不会导致迁移被截断。
+
+验证：
+
+```text
+G:\\Anaconda\\envs\\smallshrimp\\python.exe -m pytest tests/test_storage_ports.py tests/test_events.py -q
+10 passed
+G:\\Anaconda\\envs\\smallshrimp\\python.exe -m compileall -q src migrations
+git diff --check
+```
+
+本次修订提交：`280cf9e refactor: use sqlalchemy python migrations`
