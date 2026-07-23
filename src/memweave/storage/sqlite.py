@@ -34,8 +34,7 @@ class SQLiteDatabase(SQLAlchemyDatabase):
             cursor.execute("PRAGMA busy_timeout=30000")
             cursor.close()
 
-        default_dir = Path(__file__).resolve().parents[3] / "migrations"
-        self.migrations = MigrationRunner(migration_dir or str(default_dir))
+        self.migrations = MigrationRunner(migration_dir)
         self.apply_migrations()
 
     @contextmanager

@@ -59,8 +59,8 @@ src/memweave/
     tools.py               # governed memory tool definitions and dispatcher
   http_api.py              # FastAPI adapter for Core and protocol endpoints
   worker.py                # local outbox worker
-migrations/
-  0001_core.py             # events, stream heads, projection watermarks
+src/memweave/migrations/
+  versions/0001_core.py    # events, stream heads, projection watermarks
 tests/
   conftest.py
   test_models.py
@@ -115,7 +115,7 @@ docs/superpowers/logs/
 - Create: `src/memweave/storage/vector.py`
 - Create: `src/memweave/storage/graph.py`
 - Create: `src/memweave/storage/keyword.py`
-- Create: `migrations/0001_core.py`
+- Create: `src/memweave/migrations/versions/0001_core.py`
 - Create: `src/memweave/events.py`
 - Modify: `pyproject.toml`
 - Test: `tests/test_storage_ports.py`, `tests/test_events.py`

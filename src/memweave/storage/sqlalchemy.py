@@ -1,7 +1,6 @@
 """SQLAlchemy Core relational database foundation."""
 
 from contextlib import contextmanager
-from pathlib import Path
 from typing import Iterator, List, Optional
 
 from sqlalchemy import create_engine
@@ -14,8 +13,7 @@ class SQLAlchemyDatabase:
     def __init__(self, url: str, migration_dir: Optional[str] = None):
         self.url = url
         self.engine: Engine = create_engine(url, future=True)
-        default_dir = Path(__file__).resolve().parents[3] / "migrations"
-        self.migrations = MigrationRunner(migration_dir or str(default_dir))
+        self.migrations = MigrationRunner(migration_dir)
 
     @contextmanager
     def begin(self) -> Iterator[Connection]:
