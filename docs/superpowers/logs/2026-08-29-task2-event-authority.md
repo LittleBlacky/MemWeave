@@ -122,3 +122,28 @@ git diff --check
 ```
 
 本次修订提交：`280cf9e refactor: use sqlalchemy python migrations`
+
+## 迁移资源打包审查修订
+
+审查发现默认迁移路径依赖源码仓库根目录。安装 wheel 后，顶层 `migrations/` 目录可能不存在，导致数据库初始化找不到迁移文件。
+
+修订内容：
+
+- 将迁移放入 `src/memweave/migrations/versions/` 包内；
+- `MigrationRunner()` 默认通过 `importlib.resources` 发现包内迁移；
+- `migration_dir` 仍可用于外部项目提供自定义 Python migration；
+- 数据库适配器不再根据 `__file__` 推导源码目录。
+
+验证：
+
+```text
+G:\\Anaconda\\envs\\smallshrimp\\python.exe -m pytest tests/test_storage_ports.py tests/test_events.py -q
+11 passed
+G:\\Anaconda\\envs\\smallshrimp\\python.exe -m compileall -q src migrations
+git diff --check
+pip wheel . --no-deps --wheel-dir <temporary-directory>
+wheel contains memweave/migrations/versions/0001_core.py
+installed wheel migration smoke test: ['0001_core']
+```
+
+本次修订提交：`6d66a79 fix: load migrations from installed package`
