@@ -1,4 +1,5 @@
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 from uuid import uuid4
 
 import pytest
@@ -64,6 +65,35 @@ def test_duplicate_event_id_is_idempotent_and_payload_is_immutable(tmp_path):
             "user:u1",
             request_id=request_id,
             event_id=event_id,
+        )
+
+
+def test_duplicate_event_id_rejects_a_different_occurred_at(tmp_path):
+    store = EventStore(Database(str(tmp_path / "events.db")))
+    event_id = uuid4()
+    request_id = uuid4()
+    first_occurred_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    second_occurred_at = datetime(2026, 1, 2, tzinfo=timezone.utc)
+
+    store.append(
+        "session:s1",
+        EventType.USER_MESSAGE,
+        {"text": "same"},
+        "user:u1",
+        request_id=request_id,
+        event_id=event_id,
+        occurred_at=first_occurred_at,
+    )
+
+    with pytest.raises(ValueError, match="immutable"):
+        store.append(
+            "session:s1",
+            EventType.USER_MESSAGE,
+            {"text": "same"},
+            "user:u1",
+            request_id=request_id,
+            event_id=event_id,
+            occurred_at=second_occurred_at,
         )
 
 

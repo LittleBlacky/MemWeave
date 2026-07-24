@@ -49,6 +49,7 @@ class EventStore:
             raise TypeError("request_id must be a UUID")
 
         event_id = event_id or uuid4()
+        occurred_at_was_provided = occurred_at is not None
         occurred_at = occurred_at or utc_now()
         event_type_value = event_type.value if isinstance(event_type, EventType) else event_type
         payload_json = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=_json_default)
@@ -61,7 +62,11 @@ class EventStore:
             "idempotency_key": idempotency_key,
             "causation_id": str(causation_id) if causation_id else None,
             "correlation_id": str(correlation_id) if correlation_id else None,
+            "schema_version": 1,
+            "protocol_version": "1.0",
         }
+        if occurred_at_was_provided:
+            immutable_values["occurred_at"] = occurred_at.isoformat()
 
         for attempt in range(self.max_append_retries + 1):
             try:
