@@ -147,3 +147,25 @@ installed wheel migration smoke test: ['0001_core']
 ```
 
 本次修订提交：`6d66a79 fix: load migrations from installed package`
+
+## 事件幂等校验审查修订
+
+审查发现重复 `event_id` 的比较遗漏了 `occurred_at`、`schema_version` 和 `protocol_version`。显式传入不同发生时间时，旧实现会错误返回第一次事件。
+
+修订内容：
+
+- 将固定的 schema/protocol 版本纳入不可变字段比较；
+- 调用者显式提供 `occurred_at` 时，重复事件必须使用完全相同的时间；
+- 调用者未提供 `occurred_at` 时继续使用原有自动生成时间的幂等语义；
+- 增加不同 `occurred_at` 的重复事件回归测试。
+
+验证：
+
+```text
+G:\\Anaconda\\envs\\smallshrimp\\python.exe -m pytest tests/test_events.py tests/test_storage_ports.py tests/test_models.py tests/test_protocol.py -q
+24 passed
+G:\\Anaconda\\envs\\smallshrimp\\python.exe -m compileall -q src
+git diff --check
+```
+
+本次修订提交：`cbdc593 fix: validate immutable event timestamps`
