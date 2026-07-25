@@ -2,7 +2,7 @@
 
 from typing import Any, ContextManager, Dict, Protocol, runtime_checkable
 
-from ..models import Event
+from ..models import Event, MemoryRecord
 
 
 class RelationalDatabase(Protocol):
@@ -31,9 +31,6 @@ class EventRepository(Protocol):
 class ProjectionBackend(Protocol):
     name: str
 
-    def project(self, event: Event) -> None:
-        ...
-
     def health(self) -> bool:
         ...
 
@@ -41,8 +38,14 @@ class ProjectionBackend(Protocol):
         ...
 
 
+@runtime_checkable
+class EventProjector(ProjectionBackend, Protocol):
+    def apply(self, event: Event) -> None:
+        ...
+
+
 class VectorIndex(ProjectionBackend, Protocol):
-    def upsert(self, memory: Any) -> None:
+    def upsert(self, memory: MemoryRecord) -> None:
         ...
 
     def delete(self, memory_id: str) -> None:
@@ -50,7 +53,7 @@ class VectorIndex(ProjectionBackend, Protocol):
 
 
 class GraphStore(ProjectionBackend, Protocol):
-    def upsert(self, memory: Any) -> None:
+    def upsert(self, memory: MemoryRecord) -> None:
         ...
 
     def delete(self, memory_id: str) -> None:
@@ -58,7 +61,7 @@ class GraphStore(ProjectionBackend, Protocol):
 
 
 class KeywordIndex(ProjectionBackend, Protocol):
-    def upsert(self, memory: Any) -> None:
+    def upsert(self, memory: MemoryRecord) -> None:
         ...
 
     def delete(self, memory_id: str) -> None:

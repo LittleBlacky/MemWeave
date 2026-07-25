@@ -123,8 +123,8 @@ docs/superpowers/logs/
 **Interfaces:**
 - `RelationalDatabase.begin()`, `RelationalDatabase.read()`, and `RelationalDatabase.apply_migrations()`.
 - `EventRepository.append(...) -> Event`; `list_after(stream_id, seq) -> list[Event]`; `last_seq(stream_id) -> int`.
-- `StorageCoordinator.register_backend(backend)`, `project(event)`, and `watermarks() -> dict[str, int]`.
-- `VectorIndex`, `GraphStore`, and `KeywordIndex` are ports with `upsert`, `delete`, and health/watermark methods; Phase 1 provides no external concrete index implementation.
+- `EventProjector.apply(event)`, `StorageCoordinator.register_backend(backend)`, `project(event)`, and `watermarks() -> dict[str, int]`.
+- `VectorIndex`, `GraphStore`, and `KeywordIndex` are independent memory-index ports with `upsert`, `delete`, and health/watermark methods; they are not event projectors. Phase 1 provides no external concrete index implementation.
 
 - [ ] **Step 1: Write failing tests** for storage-port registration, migration versioning, sequence allocation, duplicate event idempotency, concurrent writers, protocol metadata persistence, and immutable payload retrieval.
 - [ ] **Step 2: Run `python -m pytest tests/test_storage_ports.py tests/test_events.py -q`** and verify failure because the storage ports and migration runner do not exist.

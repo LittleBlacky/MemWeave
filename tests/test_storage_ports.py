@@ -1,6 +1,7 @@
 from concurrent.futures import ThreadPoolExecutor
 from uuid import uuid4
 
+import pytest
 from sqlalchemy import text
 
 from memweave.events import EventStore
@@ -8,7 +9,7 @@ from memweave.models import Event
 from memweave.models import EventType
 from memweave.storage.coordinator import StorageCoordinator
 from memweave.storage.migrations import MigrationRunner
-from memweave.storage.ports import ProjectionBackend
+from memweave.storage.ports import EventProjector, ProjectionBackend, VectorIndex
 from memweave.storage.sqlalchemy import SQLAlchemyDatabase
 from memweave.storage.sqlite import SQLiteDatabase
 
@@ -19,7 +20,7 @@ class RecordingBackend:
         self.events = []
         self.last_seq = 0
 
-    def project(self, event: Event) -> None:
+    def apply(self, event: Event) -> None:
         self.events.append(event.event_id)
         self.last_seq = event.seq
 
@@ -117,3 +118,27 @@ def test_storage_coordinator_projects_to_multiple_backends():
 
 def test_projection_backend_is_a_runtime_checkable_contract():
     assert isinstance(RecordingBackend(), ProjectionBackend)
+    assert isinstance(RecordingBackend(), EventProjector)
+
+
+class RecordingVectorIndex:
+    name = "vector"
+
+    def upsert(self, memory):
+        pass
+
+    def delete(self, memory_id: str) -> None:
+        pass
+
+    def health(self) -> bool:
+        return True
+
+    def watermark(self) -> int:
+        return 0
+
+
+def test_index_backend_is_not_an_event_projector():
+    assert isinstance(RecordingVectorIndex(), VectorIndex)
+    assert not isinstance(RecordingVectorIndex(), EventProjector)
+    with pytest.raises(TypeError, match="EventProjector"):
+        StorageCoordinator().register_backend(RecordingVectorIndex())
