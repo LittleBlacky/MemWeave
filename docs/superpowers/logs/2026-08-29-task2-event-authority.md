@@ -169,3 +169,25 @@ git diff --check
 ```
 
 本次修订提交：`cbdc593 fix: validate immutable event timestamps`
+
+## 投影接口语义审查修订
+
+审查发现 `ProjectionBackend.project(event)` 与向量、图、关键词索引的 `upsert/delete` 职责混用，Coordinator 会把原始 `Event` 直接传给不理解事件语义的索引后端。
+
+修订内容：
+
+- 保留 `ProjectionBackend` 作为健康状态和水位能力的公共契约；
+- 新增 `EventProjector.apply(event)`，Coordinator 只注册和调度事件投影器；
+- `VectorIndex`、`GraphStore`、`KeywordIndex` 独立接收 `MemoryRecord`，不再继承事件投影行为；
+- 增加契约测试，确保索引对象不能被注册为事件投影器。
+
+验证：
+
+```text
+G:\\Anaconda\\envs\\smallshrimp\\python.exe -m pytest tests/test_events.py tests/test_storage_ports.py tests/test_models.py tests/test_protocol.py -q
+25 passed
+G:\\Anaconda\\envs\\smallshrimp\\python.exe -m compileall -q src
+git diff --check
+```
+
+本次修订提交：`84e7374 refactor: split event and index projection ports`
