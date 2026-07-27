@@ -122,7 +122,7 @@ docs/superpowers/logs/
 
 **Interfaces:**
 - `RelationalDatabase.begin()`, `RelationalDatabase.read()`, and `RelationalDatabase.apply_migrations()`.
-- `EventRepository.append(...) -> Event`; `list_after(stream_id, seq) -> list[Event]`; `last_seq(stream_id) -> int`.
+- `EventRepository.append(stream_id, event_type, payload, actor, request_id, event_id=None, occurred_at=None, causation_id=None, correlation_id=None, idempotency_key=None) -> Event`; `list_after(stream_id, seq) -> list[Event]`; `last_seq(stream_id) -> int`.
 - `EventProjector.apply(event)`, `StorageCoordinator.register_backend(backend)`, `project(event)`, and `watermarks() -> dict[str, int]`.
 - `VectorIndex`, `GraphStore`, and `KeywordIndex` are independent memory-index ports with `upsert`, `delete`, and health/watermark methods; they are not event projectors. Phase 1 provides no external concrete index implementation.
 

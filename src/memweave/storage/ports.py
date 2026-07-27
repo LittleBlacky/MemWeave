@@ -1,8 +1,10 @@
 """Backend contracts used by the memory core."""
 
+from datetime import datetime
 from typing import Any, ContextManager, Dict, Protocol, runtime_checkable
+from uuid import UUID
 
-from ..models import Event, MemoryRecord
+from ..models import Event, EventType, MemoryRecord
 
 
 class RelationalDatabase(Protocol):
@@ -17,7 +19,19 @@ class RelationalDatabase(Protocol):
 
 
 class EventRepository(Protocol):
-    def append(self, *args: Any, **kwargs: Any) -> Event:
+    def append(
+        self,
+        stream_id: str,
+        event_type: EventType | str,
+        payload: Dict[str, Any],
+        actor: str,
+        request_id: UUID,
+        event_id: UUID | None = None,
+        occurred_at: datetime | None = None,
+        causation_id: UUID | None = None,
+        correlation_id: UUID | None = None,
+        idempotency_key: str | None = None,
+    ) -> Event:
         ...
 
     def list_after(self, stream_id: str, seq: int) -> list[Event]:

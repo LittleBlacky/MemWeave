@@ -1,4 +1,5 @@
 from concurrent.futures import ThreadPoolExecutor
+from inspect import signature
 from uuid import uuid4
 
 import pytest
@@ -9,7 +10,7 @@ from memweave.models import Event
 from memweave.models import EventType
 from memweave.storage.coordinator import StorageCoordinator
 from memweave.storage.migrations import MigrationRunner
-from memweave.storage.ports import EventProjector, ProjectionBackend, VectorIndex
+from memweave.storage.ports import EventProjector, EventRepository, ProjectionBackend, VectorIndex
 from memweave.storage.sqlalchemy import SQLAlchemyDatabase
 from memweave.storage.sqlite import SQLiteDatabase
 
@@ -142,3 +143,26 @@ def test_index_backend_is_not_an_event_projector():
     assert not isinstance(RecordingVectorIndex(), EventProjector)
     with pytest.raises(TypeError, match="EventProjector"):
         StorageCoordinator().register_backend(RecordingVectorIndex())
+
+
+def test_event_repository_append_declares_explicit_contract():
+    parameters = signature(EventRepository.append).parameters
+
+    assert list(parameters) == [
+        "self",
+        "stream_id",
+        "event_type",
+        "payload",
+        "actor",
+        "request_id",
+        "event_id",
+        "occurred_at",
+        "causation_id",
+        "correlation_id",
+        "idempotency_key",
+    ]
+    assert parameters["event_id"].default is None
+    assert parameters["occurred_at"].default is None
+    assert parameters["causation_id"].default is None
+    assert parameters["correlation_id"].default is None
+    assert parameters["idempotency_key"].default is None
