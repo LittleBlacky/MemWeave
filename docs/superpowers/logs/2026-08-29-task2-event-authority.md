@@ -191,3 +191,25 @@ git diff --check
 ```
 
 本次修订提交：`84e7374 refactor: split event and index projection ports`
+
+## EventRepository 契约审查修订
+
+审查发现 `EventRepository.append` 使用 `*args/**kwargs`，无法向调用方或第三方适配器表达真实参数契约，静态检查也无法发现参数名和类型错误。
+
+修订内容：
+
+- 用显式签名替换 `*args/**kwargs`；
+- 声明流 ID、事件类型、payload、actor、request ID 及所有可选幂等/因果字段；
+- 参数顺序和默认值与 `EventStore.append` 保持一致；
+- 增加接口签名回归测试。
+
+验证：
+
+```text
+G:\\Anaconda\\envs\\smallshrimp\\python.exe -m pytest tests/test_events.py tests/test_storage_ports.py tests/test_models.py tests/test_protocol.py -q
+26 passed
+G:\\Anaconda\\envs\\smallshrimp\\python.exe -m compileall -q src
+git diff --check
+```
+
+本次修订提交：`961a017 fix: define explicit event repository contract`
