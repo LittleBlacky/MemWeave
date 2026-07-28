@@ -8,7 +8,7 @@ from sqlalchemy import text
 from memweave.events import EventStore
 from memweave.models import Event
 from memweave.models import EventType
-from memweave.storage.coordinator import StorageCoordinator
+from memweave.storage.coordinator import ProjectionDispatcher, StorageCoordinator
 from memweave.storage.migrations import MigrationRunner
 from memweave.storage.ports import EventProjector, EventRepository, ProjectionBackend, VectorIndex
 from memweave.storage.sqlalchemy import SQLAlchemyDatabase
@@ -166,3 +166,8 @@ def test_event_repository_append_declares_explicit_contract():
     assert parameters["causation_id"].default is None
     assert parameters["correlation_id"].default is None
     assert parameters["idempotency_key"].default is None
+
+
+def test_in_process_projection_dispatcher_has_explicit_name_with_compatibility_alias():
+    assert ProjectionDispatcher.__name__ == "ProjectionDispatcher"
+    assert StorageCoordinator is ProjectionDispatcher

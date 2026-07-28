@@ -203,6 +203,8 @@ SDK 与独立服务共享领域模型，核心 API 包括：`append_event`、`re
 
 `StorageCoordinator` 负责将一条权威记忆分发到多个存储后端，但不把这些后端混为一个事务。其最小能力包括：注册/注销后端、按记忆种类和作用域路由、写入 Outbox、读取各后端 watermark、报告健康状态，以及在索引损坏时从权威表重建。
 
+Task 2 当前提供的 `ProjectionDispatcher` 只负责进程内事件 fan-out；`StorageCoordinator` 作为兼容名称保留。Outbox 写入、持久化 watermark、失败重试、重启恢复和索引重建由后续任务实现，不能把当前分发器当作可靠投递组件。
+
 推荐的职责边界如下：
 
 | 存储端口 | 默认角色 | 一致性 | 可否作为唯一真相 |
