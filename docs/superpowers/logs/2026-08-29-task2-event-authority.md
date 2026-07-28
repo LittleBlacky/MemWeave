@@ -213,3 +213,25 @@ git diff --check
 ```
 
 本次修订提交：`961a017 fix: define explicit event repository contract`
+
+## StorageCoordinator 能力边界审查修订
+
+审查发现当前 `StorageCoordinator` 只是进程内顺序分发器，没有持久化 checkpoint、失败队列或重启恢复能力，但名称和文档容易让调用方误以为它已经提供可靠投递。
+
+修订内容：
+
+- 将实现类明确命名为 `ProjectionDispatcher`；
+- 保留 `StorageCoordinator` 作为兼容别名；
+- 在模块和设计文档中明确当前仅提供 best-effort in-process fan-out；
+- 明确 Outbox 负责后续的持久化水位、重试、重启恢复和索引重建。
+
+验证：
+
+```text
+G:\\Anaconda\\envs\\smallshrimp\\python.exe -m pytest tests/test_events.py tests/test_storage_ports.py tests/test_models.py tests/test_protocol.py -q
+27 passed
+G:\\Anaconda\\envs\\smallshrimp\\python.exe -m compileall -q src
+git diff --check
+```
+
+本次修订提交：`b301bab refactor: clarify projection dispatcher boundary`
