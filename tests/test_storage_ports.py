@@ -94,6 +94,25 @@ def test_generic_sqlalchemy_database_serializes_concurrent_event_appends(tmp_pat
     assert sorted(sequences) == list(range(1, 21))
 
 
+def test_memory_sqlite_database_is_shared_across_worker_threads():
+    database = SQLiteDatabase(":memory:")
+    store = EventStore(database)
+
+    def append_one(index):
+        return store.append(
+            "session:memory-concurrent",
+            EventType.TOOL_COMPLETED,
+            {"index": index},
+            "agent:a1",
+            request_id=uuid4(),
+        ).seq
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        sequences = list(executor.map(append_one, range(20)))
+
+    assert sorted(sequences) == list(range(1, 21))
+
+
 def test_storage_coordinator_projects_to_multiple_backends():
     coordinator = StorageCoordinator()
     first = RecordingBackend()
