@@ -235,3 +235,25 @@ git diff --check
 ```
 
 本次修订提交：`b301bab refactor: clarify projection dispatcher boundary`
+
+## SQLite `:memory:` 审查修订
+
+审查发现 SQLite 内存数据库按连接隔离。迁移在主线程连接上执行后，工作线程从连接池获得新连接，会出现 `no such table: events`；`check_same_thread=False` 并不会让不同连接共享内存状态。
+
+修订内容：
+
+- `:memory:` 使用 SQLAlchemy `StaticPool`，让同一进程内线程共享一条连接；
+- 仅对内存数据库使用 `RLock` 串行化连接访问，避免同一 DBAPI 连接上的事务交叉；
+- 文件 SQLite 继续使用原有连接池和并发行为；
+- 增加主线程迁移、8 线程并发追加的回归测试。
+
+验证：
+
+```text
+G:\\Anaconda\\envs\\smallshrimp\\python.exe -m pytest tests/test_events.py tests/test_storage_ports.py tests/test_models.py tests/test_protocol.py -q
+28 passed
+G:\\Anaconda\\envs\\smallshrimp\\python.exe -m compileall -q src
+git diff --check
+```
+
+本次修订提交：`c7e2642 fix: share sqlite memory database across threads`
