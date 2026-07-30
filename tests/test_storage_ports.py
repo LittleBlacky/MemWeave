@@ -190,3 +190,20 @@ def test_event_repository_append_declares_explicit_contract():
 def test_in_process_projection_dispatcher_has_explicit_name_with_compatibility_alias():
     assert ProjectionDispatcher.__name__ == "ProjectionDispatcher"
     assert StorageCoordinator is ProjectionDispatcher
+
+
+class BrokenWatermarkBackend(RecordingBackend):
+    def __init__(self):
+        super().__init__("broken-watermark")
+
+    def watermark(self) -> int:
+        raise RuntimeError("watermark unavailable")
+
+
+def test_projection_dispatcher_watermarks_isolate_backend_failures():
+    dispatcher = ProjectionDispatcher()
+    dispatcher.register_backend(RecordingBackend())
+    dispatcher.register_backend(BrokenWatermarkBackend())
+
+    assert dispatcher.watermarks() == {"recording": 0}
+    assert dispatcher.errors() == {"broken-watermark": "watermark unavailable"}

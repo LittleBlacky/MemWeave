@@ -38,7 +38,13 @@ class ProjectionDispatcher:
         return watermarks
 
     def watermarks(self) -> Dict[str, int]:
-        return {name: backend.watermark() for name, backend in self._backends.items()}
+        watermarks: Dict[str, int] = {}
+        for name, backend in self._backends.items():
+            try:
+                watermarks[name] = backend.watermark()
+            except Exception as exc:
+                self._errors[name] = str(exc)
+        return watermarks
 
     def errors(self) -> Dict[str, str]:
         return dict(self._errors)
