@@ -257,3 +257,25 @@ git diff --check
 ```
 
 本次修订提交：`c7e2642 fix: share sqlite memory database across threads`
+
+## 投影水位查询审查修订
+
+审查发现 `ProjectionDispatcher.watermarks()` 使用字典推导式，任一后端的水位查询异常都会中断整个查询，导致其它后端的健康水位无法返回。
+
+修订内容：
+
+- 改为逐后端查询并隔离异常；
+- 返回所有成功后端的水位；
+- 将失败后端及错误信息写入 `errors()`；
+- 增加水位查询故障隔离回归测试。
+
+验证：
+
+```text
+G:\\Anaconda\\envs\\smallshrimp\\python.exe -m pytest tests/test_events.py tests/test_storage_ports.py tests/test_models.py tests/test_protocol.py -q
+29 passed
+G:\\Anaconda\\envs\\smallshrimp\\python.exe -m compileall -q src
+git diff --check
+```
+
+本次修订提交：`56f530f fix: isolate projection watermark failures`
