@@ -129,7 +129,7 @@ docs/superpowers/logs/
 - [ ] **Step 1: Write failing tests** for storage-port registration, migration versioning, sequence allocation, duplicate event idempotency, concurrent writers, protocol metadata persistence, and immutable payload retrieval.
 - [ ] **Step 2: Run `python -m pytest tests/test_storage_ports.py tests/test_events.py -q`** and verify failure because the storage ports and migration runner do not exist.
 - [ ] **Step 3: Add SQLAlchemy Core 2.x and implement the relational ports**; use a versioned Python migration in `migrations/0001_core.py` backed by the SQLAlchemy table definitions, keep SQLite WAL/busy-timeout settings in `sqlite.py`, and make `EventRepository` use explicit transactions without ORM entities.
-- [ ] **Step 4: Implement `ProjectionDispatcher`** so one committed event can be fanned out to multiple registered projection backends with independent watermarks and no cross-database two-phase commit; durable delivery and restart recovery belong to Task 5 Outbox.
+- [ ] **Step 4: Implement `ProjectionDispatcher`** so one committed event can be fanned out to multiple registered projection backends with independent watermarks and optional relational checkpoint persistence; durable delivery, retries, and restart recovery belong to Task 5 Outbox.
 - [ ] **Step 5: Run storage and event tests** including a two-thread append stress case, migration rerun, backend failure isolation, and projection watermark checks.
 - [ ] **Step 6: Update `docs/superpowers/logs/2026-08-29-task2-event-authority.md`** with the storage-boundary revision, test evidence, and final commit hash.
 - [ ] **Step 7: Commit** with `feat: add extensible storage ports and event authority`.

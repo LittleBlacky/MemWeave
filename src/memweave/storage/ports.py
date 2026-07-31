@@ -41,6 +41,14 @@ class EventRepository(Protocol):
         ...
 
 
+class ProjectionCheckpointStore(Protocol):
+    def get(self, projection: str, stream_id: str) -> int:
+        ...
+
+    def save_max(self, projection: str, stream_id: str, seq: int) -> int:
+        ...
+
+
 @runtime_checkable
 class ProjectionBackend(Protocol):
     name: str

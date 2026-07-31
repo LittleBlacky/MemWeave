@@ -1,21 +1,23 @@
 """Dispatch events to in-process projection handlers.
 
-Durable delivery, retries, checkpoints, and restart recovery belong to the
-Outbox worker. This module only performs best-effort in-process fan-out.
+Durable delivery, retries, and restart recovery belong to the Outbox worker.
+An optional checkpoint store records successfully applied event watermarks;
+this module still only performs best-effort in-process fan-out.
 """
 
 from typing import Dict
 
 from ..models import Event
-from .ports import EventProjector
+from .ports import EventProjector, ProjectionCheckpointStore
 
 
 class ProjectionDispatcher:
     """Best-effort in-process fan-out for event projectors."""
 
-    def __init__(self) -> None:
+    def __init__(self, checkpoint_store: ProjectionCheckpointStore | None = None) -> None:
         self._backends: Dict[str, EventProjector] = {}
         self._errors: Dict[str, str] = {}
+        self._checkpoint_store = checkpoint_store
 
     def register_backend(self, backend: EventProjector) -> None:
         if not isinstance(backend, EventProjector):
@@ -31,7 +33,14 @@ class ProjectionDispatcher:
         self._errors = {}
         for name, backend in self._backends.items():
             try:
+                if self._checkpoint_store is not None:
+                    checkpoint = self._checkpoint_store.get(name, event.stream_id)
+                    if event.seq <= checkpoint:
+                        watermarks[name] = checkpoint
+                        continue
                 backend.apply(event)
+                if self._checkpoint_store is not None:
+                    self._checkpoint_store.save_max(name, event.stream_id, event.seq)
                 watermarks[name] = backend.watermark()
             except Exception as exc:
                 self._errors[name] = str(exc)

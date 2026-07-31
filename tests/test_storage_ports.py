@@ -8,6 +8,7 @@ from sqlalchemy import text
 from memweave.events import EventStore
 from memweave.models import Event
 from memweave.models import EventType
+from memweave.storage.checkpoints import RelationalProjectionCheckpointStore
 from memweave.storage.coordinator import ProjectionDispatcher, StorageCoordinator
 from memweave.storage.migrations import MigrationRunner
 from memweave.storage.ports import EventProjector, EventRepository, ProjectionBackend, VectorIndex
@@ -207,3 +208,41 @@ def test_projection_dispatcher_watermarks_isolate_backend_failures():
 
     assert dispatcher.watermarks() == {"recording": 0}
     assert dispatcher.errors() == {"broken-watermark": "watermark unavailable"}
+
+
+def test_projection_checkpoint_survives_dispatcher_recreation(tmp_path):
+    database = SQLiteDatabase(str(tmp_path / "checkpoints.db"))
+    checkpoint_store = RelationalProjectionCheckpointStore(database)
+    dispatcher = ProjectionDispatcher(checkpoint_store=checkpoint_store)
+    first_backend = RecordingBackend()
+    dispatcher.register_backend(first_backend)
+    event = Event(
+        event_id=uuid4(),
+        event_type="code.test_passed",
+        stream_id="session:checkpoint",
+        seq=7,
+        actor="agent:codex",
+        payload={"exit_code": 0},
+    )
+
+    dispatcher.project(event)
+    assert first_backend.events == [event.event_id]
+
+    recreated = RelationalProjectionCheckpointStore(database)
+    assert recreated.get("recording", "session:checkpoint") == 7
+
+    second_backend = RecordingBackend()
+    restarted = ProjectionDispatcher(checkpoint_store=recreated)
+    restarted.register_backend(second_backend)
+
+    assert restarted.project(event) == {"recording": 7}
+    assert second_backend.events == []
+
+
+def test_projection_checkpoint_is_monotonic(tmp_path):
+    database = SQLiteDatabase(str(tmp_path / "checkpoint-monotonic.db"))
+    checkpoint_store = RelationalProjectionCheckpointStore(database)
+
+    assert checkpoint_store.save_max("recording", "session:s1", 7) == 7
+    assert checkpoint_store.save_max("recording", "session:s1", 5) == 7
+    assert checkpoint_store.get("recording", "session:s1") == 7
