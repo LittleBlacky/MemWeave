@@ -279,3 +279,27 @@ git diff --check
 ```
 
 本次修订提交：`56f530f fix: isolate projection watermark failures`
+
+## 投影 checkpoint 持久化审查修订
+
+审查发现投影水位只保存在后端对象内存中，进程重启后无法判断某个 `(projection, stream_id)` 已经处理到哪里，重复投影或恢复处理没有可靠依据。
+
+修订内容：
+
+- 新增 `ProjectionCheckpointStore` 端口；
+- 新增 `RelationalProjectionCheckpointStore`，复用 `projection_watermarks` 表；
+- `ProjectionDispatcher` 成功应用事件后保存最大水位；
+- 重建 dispatcher 后，已达到 checkpoint 的事件会被跳过；
+- checkpoint 具有单调性，旧序号不能回退新水位；
+- 明确 Outbox 仍负责持久化任务、失败重试和 worker 重启恢复。
+
+验证：
+
+```text
+G:\\Anaconda\\envs\\smallshrimp\\python.exe -m pytest tests/test_events.py tests/test_storage_ports.py tests/test_models.py tests/test_protocol.py -q
+30 passed
+G:\\Anaconda\\envs\\smallshrimp\\python.exe -m compileall -q src
+git diff --check
+```
+
+本次修订提交：`70c6cc1 feat: persist projection checkpoints`
