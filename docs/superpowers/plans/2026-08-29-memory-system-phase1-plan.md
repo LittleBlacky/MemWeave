@@ -123,7 +123,7 @@ docs/superpowers/logs/
 **Interfaces:**
 - `RelationalDatabase.begin()`, `RelationalDatabase.read()`, and `RelationalDatabase.apply_migrations()`.
 - `EventRepository.append(stream_id, event_type, payload, actor, request_id, event_id=None, occurred_at=None, causation_id=None, correlation_id=None, idempotency_key=None) -> Event`; `list_after(stream_id, seq) -> list[Event]`; `last_seq(stream_id) -> int`.
-- `EventProjector.apply(event)`, `ProjectionDispatcher.register_backend(backend)`, `project(event)`, and `watermarks() -> dict[str, int]`; `StorageCoordinator` is retained as a compatibility alias.
+- `EventProjector.apply(event)`, `ProjectionDispatcher.register_backend(backend)`, `project(event)`, `watermarks() -> dict[str, int]`, and `health() -> dict[str, bool]`; `StorageCoordinator` is retained as a compatibility alias.
 - `VectorIndex`, `GraphStore`, and `KeywordIndex` are independent memory-index ports with `upsert`, `delete`, and health/watermark methods; they are not event projectors. Phase 1 provides no external concrete index implementation.
 
 - [ ] **Step 1: Write failing tests** for storage-port registration, migration versioning, sequence allocation, duplicate event idempotency, concurrent writers, protocol metadata persistence, and immutable payload retrieval.

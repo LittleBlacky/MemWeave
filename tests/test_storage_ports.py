@@ -210,6 +210,23 @@ def test_projection_dispatcher_watermarks_isolate_backend_failures():
     assert dispatcher.errors() == {"broken-watermark": "watermark unavailable"}
 
 
+class BrokenHealthBackend(RecordingBackend):
+    def __init__(self):
+        super().__init__("broken-health")
+
+    def health(self) -> bool:
+        raise RuntimeError("health unavailable")
+
+
+def test_projection_dispatcher_health_isolates_backend_failures():
+    dispatcher = ProjectionDispatcher()
+    dispatcher.register_backend(RecordingBackend())
+    dispatcher.register_backend(BrokenHealthBackend())
+
+    assert dispatcher.health() == {"recording": True, "broken-health": False}
+    assert dispatcher.errors() == {"broken-health": "health unavailable"}
+
+
 def test_projection_checkpoint_survives_dispatcher_recreation(tmp_path):
     database = SQLiteDatabase(str(tmp_path / "checkpoints.db"))
     checkpoint_store = RelationalProjectionCheckpointStore(database)

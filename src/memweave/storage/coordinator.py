@@ -55,6 +55,16 @@ class ProjectionDispatcher:
                 self._errors[name] = str(exc)
         return watermarks
 
+    def health(self) -> Dict[str, bool]:
+        statuses: Dict[str, bool] = {}
+        for name, backend in self._backends.items():
+            try:
+                statuses[name] = bool(backend.health())
+            except Exception as exc:
+                statuses[name] = False
+                self._errors[name] = str(exc)
+        return statuses
+
     def errors(self) -> Dict[str, str]:
         return dict(self._errors)
 
