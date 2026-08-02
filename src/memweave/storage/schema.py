@@ -52,3 +52,20 @@ schema_migrations_table = Table(
     Column("version", String(255), primary_key=True),
     Column("applied_at", String(64), nullable=False),
 )
+
+outbox_table = Table(
+    "outbox",
+    metadata,
+    Column("id", String(36), primary_key=True),
+    Column("event_id", String(36), nullable=False),
+    Column("topic", String(255), nullable=False),
+    Column("payload_json", Text, nullable=False),
+    Column("idempotency_key", String(512), nullable=False, unique=True),
+    Column("status", String(32), nullable=False),
+    Column("attempts", Integer, nullable=False),
+    Column("available_at", String(64), nullable=False),
+    Column("locked_at", String(64)),
+    Column("last_error", Text),
+    Column("created_at", String(64), nullable=False),
+    Column("updated_at", String(64), nullable=False),
+)
