@@ -303,3 +303,25 @@ git diff --check
 ```
 
 本次修订提交：`70c6cc1 feat: persist projection checkpoints`
+
+## 投影健康查询审查修订
+
+审查发现投影协调层没有统一的健康查询接口，调用方无法获得各后端可用性；单个后端检查异常时也不应阻断其它后端状态返回。
+
+修订内容：
+
+- 新增 `ProjectionDispatcher.health()`；
+- 逐后端执行健康检查；
+- 健康检查异常的后端返回 `False` 并记录错误，其它后端状态照常返回；
+- 增加健康查询故障隔离回归测试。
+
+验证：
+
+```text
+G:\\Anaconda\\envs\\smallshrimp\\python.exe -m pytest tests/test_events.py tests/test_storage_ports.py tests/test_models.py tests/test_protocol.py -q
+32 passed
+G:\\Anaconda\\envs\\smallshrimp\\python.exe -m compileall -q src
+git diff --check
+```
+
+本次修订提交：`e322cde feat: add projection health reporting`
