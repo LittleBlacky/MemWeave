@@ -1,7 +1,9 @@
 """Local in-process worker for transactional outbox items."""
 
+from datetime import datetime, timedelta
 from typing import Callable, Mapping, Optional
 
+from .clock import utc_now
 from .outbox import OutboxItem, OutboxStore
 
 
@@ -13,9 +15,23 @@ class LocalWorker:
         self,
         outbox: OutboxStore,
         handlers: Mapping[str, OutboxHandler],
+        max_attempts: int = 5,
+        base_delay_seconds: int = 1,
+        max_delay_seconds: int = 300,
+        clock: Callable[[], datetime] = utc_now,
     ):
+        if max_attempts < 1:
+            raise ValueError("max_attempts must be positive")
+        if base_delay_seconds < 0:
+            raise ValueError("base_delay_seconds must not be negative")
+        if max_delay_seconds < base_delay_seconds:
+            raise ValueError("max_delay_seconds must be >= base_delay_seconds")
         self.outbox = outbox
         self.handlers = dict(handlers)
+        self.max_attempts = max_attempts
+        self.base_delay_seconds = base_delay_seconds
+        self.max_delay_seconds = max_delay_seconds
+        self.clock = clock
 
     def run_once(self, topic: Optional[str] = None) -> int:
         item = self.outbox.claim(topic=topic)
@@ -24,6 +40,21 @@ class LocalWorker:
         handler = self.handlers.get(item.topic)
         if handler is None:
             raise KeyError(f"no handler registered for topic: {item.topic}")
-        handler(item)
+        try:
+            handler(item)
+        except Exception as exc:
+            if item.attempts >= self.max_attempts:
+                self.outbox.mark_dead_letter(item.id, str(exc) or exc.__class__.__name__)
+            else:
+                delay = min(
+                    self.base_delay_seconds * (2 ** (item.attempts - 1)),
+                    self.max_delay_seconds,
+                )
+                self.outbox.mark_retryable(
+                    item.id,
+                    str(exc) or exc.__class__.__name__,
+                    available_at=self.clock() + timedelta(seconds=delay),
+                )
+            return 1
         self.outbox.mark_applied(item.id)
         return 1

@@ -181,7 +181,7 @@ docs/superpowers/logs/
 
 - [ ] **Step 1: Write failing tests** for retry, lease expiry, duplicate delivery, five-attempt dead-letter, and replay after restart.
 - [ ] **Step 2: Run the outbox tests** and verify failure.
-- [ ] **Step 3: Implement state transitions** `pending → processing → applied|retryable|dead_letter`, durable lease expiry, and handler idempotency checks; worker backoff remains a separate step.
+- [ ] **Step 3: Implement state transitions** `pending → processing → applied|retryable|dead_letter`, durable lease expiry, and Worker exponential backoff capped at five minutes; handler idempotency checks remain a separate step.
 - [ ] **Step 4: Run the outbox suite** and verify deterministic retries using an injected clock.
 - [ ] **Step 5: Commit** with `feat: add retryable outbox worker`.
 

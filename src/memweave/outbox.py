@@ -4,7 +4,7 @@ import json
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import Enum
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 from uuid import UUID, uuid4
 
 from sqlalchemy import and_, insert, or_, select, update
@@ -38,11 +38,17 @@ class OutboxItem:
 
 
 class OutboxStore:
-    def __init__(self, database, lease_seconds: int = 300):
+    def __init__(
+        self,
+        database,
+        lease_seconds: int = 300,
+        clock: Callable[[], datetime] = utc_now,
+    ):
         if lease_seconds < 0:
             raise ValueError("lease_seconds must not be negative")
         self.database = database
         self.lease_seconds = lease_seconds
+        self.clock = clock
 
     def enqueue(
         self,
@@ -58,7 +64,7 @@ class OutboxStore:
         if not isinstance(event_id, UUID):
             raise TypeError("event_id must be a UUID")
         payload_json = json.dumps(payload, sort_keys=True, separators=(",", ":"))
-        now = utc_now()
+        now = self.clock()
         item_id = uuid4()
         values = {
             "event_id": str(event_id),
@@ -104,7 +110,7 @@ class OutboxStore:
         return self._row_to_item(row)
 
     def claim(self, topic: Optional[str] = None) -> Optional[OutboxItem]:
-        now = utc_now()
+        now = self.clock()
         cutoff = (now - timedelta(seconds=self.lease_seconds)).isoformat()
         available = [
             outbox_table.c.status == OutboxStatus.PENDING.value,
@@ -164,7 +170,7 @@ class OutboxStore:
             OutboxStatus.RETRYABLE,
             last_error=error,
             locked_at=None,
-            available_at=(available_at or utc_now()).isoformat(),
+            available_at=(available_at or self.clock()).isoformat(),
         )
 
     def mark_dead_letter(self, item_id: UUID, error: str) -> None:
@@ -178,7 +184,7 @@ class OutboxStore:
         )
 
     def _transition(self, item_id: UUID, status: OutboxStatus, **values: Any) -> None:
-        now = utc_now().isoformat()
+        now = self.clock().isoformat()
         with self.database.begin() as connection:
             result = connection.execute(
                 update(outbox_table)
