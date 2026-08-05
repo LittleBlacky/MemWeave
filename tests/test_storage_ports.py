@@ -36,22 +36,42 @@ class RecordingBackend:
 def test_sqlite_database_migrations_are_versioned_and_idempotent(tmp_path):
     database = SQLiteDatabase(str(tmp_path / "memory.db"))
 
-    assert database.applied_migrations() == ["0001_core", "0002_outbox"]
+    assert database.applied_migrations() == [
+        "0001_core",
+        "0002_outbox",
+        "0003_outbox_consumer_receipts",
+    ]
 
 
 def test_default_migration_runner_discovers_packaged_migrations():
     runner = MigrationRunner()
 
-    assert list(runner.discover()) == ["0001_core", "0002_outbox"]
+    assert list(runner.discover()) == [
+        "0001_core",
+        "0002_outbox",
+        "0003_outbox_consumer_receipts",
+    ]
 
 
 def test_generic_sqlalchemy_database_can_apply_core_migration(tmp_path):
     database = SQLAlchemyDatabase(f"sqlite+pysqlite:///{tmp_path / 'generic.db'}")
 
-    assert database.apply_migrations() == ["0001_core", "0002_outbox"]
-    assert database.applied_migrations() == ["0001_core", "0002_outbox"]
+    assert database.apply_migrations() == [
+        "0001_core",
+        "0002_outbox",
+        "0003_outbox_consumer_receipts",
+    ]
+    assert database.applied_migrations() == [
+        "0001_core",
+        "0002_outbox",
+        "0003_outbox_consumer_receipts",
+    ]
     assert database.apply_migrations() == []
-    assert database.applied_migrations() == ["0001_core", "0002_outbox"]
+    assert database.applied_migrations() == [
+        "0001_core",
+        "0002_outbox",
+        "0003_outbox_consumer_receipts",
+    ]
 
 
 def test_migration_runner_executes_python_migration_with_semicolons_in_values(tmp_path):

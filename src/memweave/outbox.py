@@ -10,7 +10,7 @@ from uuid import UUID, uuid4
 from sqlalchemy import and_, insert, or_, select, update
 
 from .clock import utc_now
-from .storage.schema import outbox_table
+from .storage.schema import outbox_consumer_receipts_table, outbox_table
 
 
 class OutboxStatus(str, Enum):
@@ -19,6 +19,17 @@ class OutboxStatus(str, Enum):
     RETRYABLE = "retryable"
     APPLIED = "applied"
     DEAD_LETTER = "dead_letter"
+
+
+class ConsumerReceiptStatus(str, Enum):
+    PROCESSING = "processing"
+    APPLIED = "applied"
+
+
+class ConsumerClaimResult(str, Enum):
+    ACQUIRED = "acquired"
+    ALREADY_APPLIED = "already_applied"
+    BUSY = "busy"
 
 
 @dataclass(frozen=True)
@@ -182,6 +193,109 @@ class OutboxStore:
             last_error=error,
             locked_at=None,
         )
+
+    def begin_consume(self, item_id: UUID, consumer_id: str) -> ConsumerClaimResult:
+        """Reserve a delivery and distinguish completed, busy, and new work."""
+        if not consumer_id.strip():
+            raise ValueError("consumer_id must not be blank")
+        now = self.clock()
+        cutoff = (now - timedelta(seconds=self.lease_seconds)).isoformat()
+        with self.database.begin() as connection:
+            item = connection.execute(
+                select(outbox_table).where(outbox_table.c.id == str(item_id))
+            ).mappings().first()
+            if item is None:
+                raise KeyError(item_id)
+            receipt = connection.execute(
+                select(outbox_consumer_receipts_table)
+                .where(
+                    outbox_consumer_receipts_table.c.consumer_id == consumer_id,
+                    outbox_consumer_receipts_table.c.idempotency_key
+                    == item["idempotency_key"],
+                )
+                .with_for_update()
+            ).mappings().first()
+            if receipt is not None:
+                if receipt["status"] == ConsumerReceiptStatus.APPLIED.value:
+                    return ConsumerClaimResult.ALREADY_APPLIED
+                if (
+                    receipt["status"] == ConsumerReceiptStatus.PROCESSING.value
+                    and receipt["locked_at"]
+                    and receipt["locked_at"] > cutoff
+                ):
+                    return ConsumerClaimResult.BUSY
+                connection.execute(
+                    update(outbox_consumer_receipts_table)
+                    .where(outbox_consumer_receipts_table.c.id == receipt["id"])
+                    .values(
+                        status=ConsumerReceiptStatus.PROCESSING.value,
+                        locked_at=now.isoformat(),
+                        updated_at=now.isoformat(),
+                    )
+                )
+                return ConsumerClaimResult.ACQUIRED
+            connection.execute(
+                insert(outbox_consumer_receipts_table).values(
+                    id=str(uuid4()),
+                    outbox_id=str(item_id),
+                    consumer_id=consumer_id,
+                    idempotency_key=item["idempotency_key"],
+                    status=ConsumerReceiptStatus.PROCESSING.value,
+                    locked_at=now.isoformat(),
+                    consumed_at=None,
+                    created_at=now.isoformat(),
+                    updated_at=now.isoformat(),
+                )
+            )
+            return ConsumerClaimResult.ACQUIRED
+
+    def mark_consumed(self, item_id: UUID, consumer_id: str) -> None:
+        if not consumer_id.strip():
+            raise ValueError("consumer_id must not be blank")
+        now = self.clock().isoformat()
+        with self.database.begin() as connection:
+            item = connection.execute(
+                select(outbox_table.c.idempotency_key).where(
+                    outbox_table.c.id == str(item_id)
+                )
+            ).mappings().first()
+            if item is None:
+                raise KeyError(item_id)
+            result = connection.execute(
+                update(outbox_consumer_receipts_table)
+                .where(
+                    outbox_consumer_receipts_table.c.outbox_id == str(item_id),
+                    outbox_consumer_receipts_table.c.consumer_id == consumer_id,
+                    outbox_consumer_receipts_table.c.status
+                    == ConsumerReceiptStatus.PROCESSING.value,
+                )
+                .values(
+                    status=ConsumerReceiptStatus.APPLIED.value,
+                    locked_at=None,
+                    consumed_at=now,
+                    updated_at=now,
+                )
+            )
+            if result.rowcount != 1:
+                raise ValueError("consumer receipt is missing or not processing")
+
+    def release_consume(self, item_id: UUID, consumer_id: str) -> None:
+        if not consumer_id.strip():
+            raise ValueError("consumer_id must not be blank")
+        with self.database.begin() as connection:
+            connection.execute(
+                update(outbox_consumer_receipts_table)
+                .where(
+                    outbox_consumer_receipts_table.c.outbox_id == str(item_id),
+                    outbox_consumer_receipts_table.c.consumer_id == consumer_id,
+                    outbox_consumer_receipts_table.c.status
+                    == ConsumerReceiptStatus.PROCESSING.value,
+                )
+                .values(
+                    locked_at=None,
+                    updated_at=self.clock().isoformat(),
+                )
+            )
 
     def _transition(self, item_id: UUID, status: OutboxStatus, **values: Any) -> None:
         now = self.clock().isoformat()

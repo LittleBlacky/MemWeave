@@ -407,6 +407,8 @@ scope_revision：项目/团队/租户共享状态的并发修订号
 
 外部系统、队列、向量库和图数据库不参与该事务。跨系统交付采用 Outbox + 至少一次投递 + 幂等消费，系统承诺最终一致，不承诺跨系统 exactly-once。
 
+幂等消费由每个 Worker 的 `consumer_id` 和任务 `idempotency_key` 共同确定。Worker 在调用 handler 前持久化消费 receipt；已标记为 `applied` 的 receipt 在重投递时直接跳过，handler 失败则释放 receipt 以便重试，处理中断后由租约过期恢复。receipt 只能避免已确认完成的重复调用，无法覆盖“外部副作用已发生但 receipt 尚未提交”的崩溃窗口，因此 handler 仍必须使用相同幂等键实现自身去重，或将副作用与 receipt 放进同一权威事务。
+
 外部来源接入必须记录 source_event_id 和同步游标；重复同步通过幂等键消除，源系统暂时不可用时不阻塞当前会话。
 
 ## 15. 权威来源与冲突策略

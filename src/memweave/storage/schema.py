@@ -69,3 +69,22 @@ outbox_table = Table(
     Column("created_at", String(64), nullable=False),
     Column("updated_at", String(64), nullable=False),
 )
+
+outbox_consumer_receipts_table = Table(
+    "outbox_consumer_receipts",
+    metadata,
+    Column("id", String(36), primary_key=True),
+    Column("outbox_id", String(36), nullable=False),
+    Column("consumer_id", String(255), nullable=False),
+    Column("idempotency_key", String(512), nullable=False),
+    Column("status", String(32), nullable=False),
+    Column("locked_at", String(64)),
+    Column("consumed_at", String(64)),
+    Column("created_at", String(64), nullable=False),
+    Column("updated_at", String(64), nullable=False),
+    UniqueConstraint(
+        "consumer_id",
+        "idempotency_key",
+        name="uq_outbox_consumer_receipt_key",
+    ),
+)
