@@ -60,4 +60,13 @@ git diff --check
 
 该机制保证已确认完成的消费不会重复调用，但不承诺任意外部副作用 exactly-once；handler 仍需使用幂等键，或与 receipt 共享事务。
 
+幂等消费验证：
+
+```text
+G:\\Anaconda\\envs\\smallshrimp\\python.exe -m pytest tests/test_worker.py tests/test_outbox.py tests/test_events.py tests/test_storage_ports.py tests/test_models.py tests/test_protocol.py -q
+40 passed
+G:\\Anaconda\\envs\\smallshrimp\\python.exe -m compileall -q src
+git diff --check
+```
+
 幂等消费提交：`dc569f6 feat: add durable outbox consumer receipts`。
