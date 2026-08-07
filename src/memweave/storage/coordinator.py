@@ -5,7 +5,7 @@ An optional checkpoint store records successfully applied event watermarks;
 this module still only performs best-effort in-process fan-out.
 """
 
-from typing import Dict
+from typing import Dict, Tuple
 
 from ..models import Event
 from .ports import EventProjector, ProjectionCheckpointStore
@@ -18,6 +18,7 @@ class ProjectionDispatcher:
         self._backends: Dict[str, EventProjector] = {}
         self._errors: Dict[str, str] = {}
         self._checkpoint_store = checkpoint_store
+        self._pending: Dict[Tuple[str, str], Dict[int, Event]] = {}
 
     def register_backend(self, backend: EventProjector) -> None:
         if not isinstance(backend, EventProjector):
@@ -38,10 +39,22 @@ class ProjectionDispatcher:
                     if event.seq <= checkpoint:
                         watermarks[name] = checkpoint
                         continue
-                backend.apply(event)
-                if self._checkpoint_store is not None:
-                    self._checkpoint_store.save_max(name, event.stream_id, event.seq)
-                watermarks[name] = backend.watermark()
+                    pending = self._pending.setdefault((name, event.stream_id), {})
+                    pending.setdefault(event.seq, event)
+                    next_seq = checkpoint + 1
+                    while next_seq in pending:
+                        candidate = pending[next_seq]
+                        backend.apply(candidate)
+                        self._checkpoint_store.save_max(
+                            name, event.stream_id, candidate.seq
+                        )
+                        del pending[next_seq]
+                        checkpoint = candidate.seq
+                        next_seq += 1
+                    watermarks[name] = checkpoint
+                else:
+                    backend.apply(event)
+                    watermarks[name] = backend.watermark()
             except Exception as exc:
                 self._errors[name] = str(exc)
         return watermarks

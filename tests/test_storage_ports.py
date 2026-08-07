@@ -262,6 +262,7 @@ def test_projection_checkpoint_survives_dispatcher_recreation(tmp_path):
         payload={"exit_code": 0},
     )
 
+    checkpoint_store.save_max("recording", "session:checkpoint", 6)
     dispatcher.project(event)
     assert first_backend.events == [event.event_id]
 
@@ -283,3 +284,34 @@ def test_projection_checkpoint_is_monotonic(tmp_path):
     assert checkpoint_store.save_max("recording", "session:s1", 7) == 7
     assert checkpoint_store.save_max("recording", "session:s1", 5) == 7
     assert checkpoint_store.get("recording", "session:s1") == 7
+
+
+def test_projection_checkpoint_does_not_skip_gaps_in_out_of_order_events(tmp_path):
+    database = SQLiteDatabase(str(tmp_path / "checkpoint-gap.db"))
+    checkpoint_store = RelationalProjectionCheckpointStore(database)
+    dispatcher = ProjectionDispatcher(checkpoint_store=checkpoint_store)
+    backend = RecordingBackend()
+    dispatcher.register_backend(backend)
+
+    def event(seq):
+        return Event(
+            event_id=uuid4(),
+            event_type="code.test_passed",
+            stream_id="session:gap",
+            seq=seq,
+            actor="agent:codex",
+            payload={"seq": seq},
+        )
+
+    third = event(3)
+    first = event(1)
+    second = event(2)
+
+    assert dispatcher.project(third) == {"recording": 0}
+    assert backend.events == []
+    assert checkpoint_store.get("recording", "session:gap") == 0
+
+    assert dispatcher.project(first) == {"recording": 1}
+    assert backend.events == [first.event_id]
+    assert dispatcher.project(second) == {"recording": 3}
+    assert backend.events == [first.event_id, second.event_id, third.event_id]

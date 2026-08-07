@@ -325,3 +325,24 @@ git diff --check
 ```
 
 本次修订提交：`e322cde feat: add projection health reporting`
+
+## 乱序事件 checkpoint 审查修订
+
+审查发现 Dispatcher 以“已见到的最大序号”推进 checkpoint。若先收到 `seq=3`，checkpoint 会跳到 3，之后到达的 `seq=1/2` 会被误判为已处理，造成事件永久漏投影。
+
+修订内容：
+
+- 启用持久化 checkpoint 时，将水位定义为连续处理序号；
+- 序号存在间隙时暂存事件，不推进 checkpoint；
+- 缺口补齐后按连续序号依次调用投影器并 drain 暂存事件；
+- 未配置 checkpoint 的 best-effort 进程内分发保持原有语义，不提供跨重启乱序恢复保证；
+- 增加乱序 `seq=3 → 1 → 2` 回归测试，验证投影顺序和连续水位。
+
+验证：
+
+```text
+G:\\Anaconda\\envs\\smallshrimp\\python.exe -m pytest tests/test_storage_ports.py tests/test_events.py tests/test_models.py tests/test_protocol.py -q
+33 passed
+G:\\Anaconda\\envs\\smallshrimp\\python.exe -m compileall -q src
+git diff --check
+```
