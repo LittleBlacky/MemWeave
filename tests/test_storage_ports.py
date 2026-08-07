@@ -1,5 +1,6 @@
 from concurrent.futures import ThreadPoolExecutor
 from inspect import signature
+from threading import Barrier
 from uuid import uuid4
 
 import pytest
@@ -315,3 +316,20 @@ def test_projection_checkpoint_does_not_skip_gaps_in_out_of_order_events(tmp_pat
     assert backend.events == [first.event_id]
     assert dispatcher.project(second) == {"recording": 3}
     assert backend.events == [first.event_id, second.event_id, third.event_id]
+
+
+def test_projection_checkpoint_save_max_handles_concurrent_initial_insert(tmp_path):
+    database = SQLAlchemyDatabase(f"sqlite+pysqlite:///{tmp_path / 'checkpoint-race.db'}")
+    database.apply_migrations()
+    checkpoint_store = RelationalProjectionCheckpointStore(database)
+    barrier = Barrier(8)
+
+    def save_concurrently(seq):
+        barrier.wait(timeout=5)
+        return checkpoint_store.save_max("recording", "session:race", seq)
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        results = list(executor.map(save_concurrently, range(1, 9)))
+
+    assert max(results) == 8
+    assert checkpoint_store.get("recording", "session:race") == 8

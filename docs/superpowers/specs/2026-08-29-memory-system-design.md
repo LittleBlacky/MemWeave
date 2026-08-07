@@ -139,6 +139,8 @@ needs_confirmation
 
 事件投影的持久化 checkpoint 表示连续处理水位，而不是已见到的最大序号。启用 checkpoint 的 Dispatcher 遇到序号间隙时暂存事件，不推进水位；缺口补齐后按序投影并连续推进。未配置 checkpoint 的进程内 best-effort 分发不提供跨重启的乱序恢复保证。
 
+同一 `(projection, stream_id)` 的 checkpoint 更新必须单调且并发安全：使用数据库条件更新保证较小序号不能覆盖较大水位，首次插入冲突或暂时性锁错误仅做有限重试。
+
 ## 5. 记忆生命周期
 
 ### 5.1 显式操作（同步）

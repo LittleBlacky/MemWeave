@@ -60,7 +60,27 @@ G:\\Anaconda\\envs\\smallshrimp\\python.exe -m compileall -q src
 git diff --check
 ```
 
-修订提交：`60abdb8 feat: add extensible storage ports and event authority`
+## checkpoint 并发更新审查修订
+
+审查发现 `RelationalProjectionCheckpointStore.save_max()` 采用“先读后插入/更新”，并发初始化时可能触发唯一约束异常；并发更新时低序号也可能覆盖高水位。
+
+修订内容：
+
+- 使用 `last_seq < seq` 条件更新，保证水位不会回退；
+- 无记录时执行插入，遇到唯一约束竞争重新读取当前值；
+- 对数据库锁、死锁、序列化失败和唯一冲突执行有限指数退避；
+- 增加 8 线程并发初始化 checkpoint 的回归测试。
+
+验证：
+
+```text
+G:\\Anaconda\\envs\\smallshrimp\\python.exe -m pytest tests/test_storage_ports.py tests/test_events.py tests/test_models.py tests/test_protocol.py -q
+34 passed
+G:\\Anaconda\\envs\\smallshrimp\\python.exe -m compileall -q src
+git diff --check
+```
+
+本次修订提交：`待提交`
 
 ## 代码审查修订
 
