@@ -80,7 +80,7 @@ G:\\Anaconda\\envs\\smallshrimp\\python.exe -m compileall -q src
 git diff --check
 ```
 
-本次修订提交：`待提交`
+本次修订提交：`d06274a fix: make projection checkpoints concurrency safe`
 
 ## 代码审查修订
 
