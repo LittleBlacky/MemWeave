@@ -56,7 +56,7 @@ class ProjectionBackend(Protocol):
     def health(self) -> bool:
         ...
 
-    def watermark(self) -> int:
+    def watermark(self, stream_id: str) -> int:
         ...
 
 

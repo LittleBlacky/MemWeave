@@ -346,6 +346,29 @@ git diff --check
 
 本次修订提交：`e322cde feat: add projection health reporting`
 
+## 多 stream watermark 语义审查修订
+
+审查发现事件 `seq` 和持久化 checkpoint 都按 `stream_id` 隔离，但 `ProjectionBackend.watermark()` 只有无参数的单一整数，无法同时准确表达多个 stream 的投影进度。
+
+修订内容：
+
+- 将投影后端契约改为 `watermark(stream_id)`；
+- 将 `ProjectionDispatcher.watermarks()` 改为 `watermarks(stream_id)`；
+- 每个 stream 独立报告投影水位，避免不同 stream 之间互相覆盖或误判；
+- 增加多 stream 水位隔离回归测试；
+- 全局 offset 不纳入 Task 2，后续若需要必须作为独立日志游标建模。
+
+验证：
+
+```text
+G:\\Anaconda\\envs\\smallshrimp\\python.exe -m pytest tests/test_storage_ports.py tests/test_events.py tests/test_models.py tests/test_protocol.py -q
+35 passed
+G:\\Anaconda\\envs\\smallshrimp\\python.exe -m compileall -q src
+git diff --check
+```
+
+本次修订提交：`待提交`
+
 ## 乱序事件 checkpoint 审查修订
 
 审查发现 Dispatcher 以“已见到的最大序号”推进 checkpoint。若先收到 `seq=3`，checkpoint 会跳到 3，之后到达的 `seq=1/2` 会被误判为已处理，造成事件永久漏投影。

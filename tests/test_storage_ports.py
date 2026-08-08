@@ -21,17 +21,17 @@ class RecordingBackend:
     def __init__(self, name="recording"):
         self.name = name
         self.events = []
-        self.last_seq = 0
+        self.last_seq = {}
 
     def apply(self, event: Event) -> None:
         self.events.append(event.event_id)
-        self.last_seq = event.seq
+        self.last_seq[event.stream_id] = event.seq
 
     def health(self) -> bool:
         return True
 
-    def watermark(self) -> int:
-        return self.last_seq
+    def watermark(self, stream_id: str) -> int:
+        return self.last_seq.get(stream_id, 0)
 
 
 def test_sqlite_database_migrations_are_versioned_and_idempotent(tmp_path):
@@ -155,7 +155,10 @@ def test_storage_coordinator_projects_to_multiple_backends():
     assert result == {"recording": 4, "recording-secondary": 4}
     assert first.events == [event.event_id]
     assert second.events == [event.event_id]
-    assert coordinator.watermarks() == {"recording": 4, "recording-secondary": 4}
+    assert coordinator.watermarks("session:s1") == {
+        "recording": 4,
+        "recording-secondary": 4,
+    }
 
 
 def test_projection_backend_is_a_runtime_checkable_contract():
@@ -218,7 +221,7 @@ class BrokenWatermarkBackend(RecordingBackend):
     def __init__(self):
         super().__init__("broken-watermark")
 
-    def watermark(self) -> int:
+    def watermark(self, stream_id: str) -> int:
         raise RuntimeError("watermark unavailable")
 
 
@@ -227,7 +230,7 @@ def test_projection_dispatcher_watermarks_isolate_backend_failures():
     dispatcher.register_backend(RecordingBackend())
     dispatcher.register_backend(BrokenWatermarkBackend())
 
-    assert dispatcher.watermarks() == {"recording": 0}
+    assert dispatcher.watermarks("session:s1") == {"recording": 0}
     assert dispatcher.errors() == {"broken-watermark": "watermark unavailable"}
 
 
@@ -285,6 +288,28 @@ def test_projection_checkpoint_is_monotonic(tmp_path):
     assert checkpoint_store.save_max("recording", "session:s1", 7) == 7
     assert checkpoint_store.save_max("recording", "session:s1", 5) == 7
     assert checkpoint_store.get("recording", "session:s1") == 7
+
+
+def test_projection_watermarks_are_isolated_per_stream():
+    dispatcher = ProjectionDispatcher()
+    backend = RecordingBackend()
+    dispatcher.register_backend(backend)
+
+    def event(stream_id, seq):
+        return Event(
+            event_id=uuid4(),
+            event_type="code.test_passed",
+            stream_id=stream_id,
+            seq=seq,
+            actor="agent:codex",
+            payload={"seq": seq},
+        )
+
+    dispatcher.project(event("session:a", 100))
+    dispatcher.project(event("session:b", 1))
+
+    assert dispatcher.watermarks("session:a") == {"recording": 100}
+    assert dispatcher.watermarks("session:b") == {"recording": 1}
 
 
 def test_projection_checkpoint_does_not_skip_gaps_in_out_of_order_events(tmp_path):

@@ -54,16 +54,18 @@ class ProjectionDispatcher:
                     watermarks[name] = checkpoint
                 else:
                     backend.apply(event)
-                    watermarks[name] = backend.watermark()
+                    watermarks[name] = backend.watermark(event.stream_id)
             except Exception as exc:
                 self._errors[name] = str(exc)
         return watermarks
 
-    def watermarks(self) -> Dict[str, int]:
+    def watermarks(self, stream_id: str) -> Dict[str, int]:
+        if not isinstance(stream_id, str) or not stream_id.strip():
+            raise ValueError("stream_id must not be blank")
         watermarks: Dict[str, int] = {}
         for name, backend in self._backends.items():
             try:
-                watermarks[name] = backend.watermark()
+                watermarks[name] = backend.watermark(stream_id)
             except Exception as exc:
                 self._errors[name] = str(exc)
         return watermarks
