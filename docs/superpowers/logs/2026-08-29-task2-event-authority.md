@@ -367,7 +367,7 @@ G:\\Anaconda\\envs\\smallshrimp\\python.exe -m compileall -q src
 git diff --check
 ```
 
-本次修订提交：`待提交`
+本次修订提交：`d12c155 fix: scope projection watermarks per stream`
 
 ## 乱序事件 checkpoint 审查修订
 
