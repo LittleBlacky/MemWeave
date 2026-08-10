@@ -390,7 +390,7 @@ G:\\Anaconda\\envs\\smallshrimp\\python.exe -m compileall -q src
 git diff --check
 ```
 
-本次修订提交：`待提交`
+本次修订提交：`51d68a5 fix: serialize projection dispatch per stream`
 
 ## 乱序事件 checkpoint 审查修订
 
