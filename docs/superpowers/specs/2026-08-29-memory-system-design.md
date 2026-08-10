@@ -141,6 +141,8 @@ needs_confirmation
 
 同一 `(projection, stream_id)` 的 checkpoint 更新必须单调且并发安全：使用数据库条件更新保证较小序号不能覆盖较大水位，首次插入冲突或暂时性锁错误仅做有限重试。
 
+进程内 `ProjectionDispatcher` 对每个 `(backend, stream_id)` 使用独立锁，串行化该 stream 的 pending 缓存、事件应用和 checkpoint 提交；不同后端或不同 stream 不共享此锁。后端注册应在开始投影前完成。
+
 ## 5. 记忆生命周期
 
 ### 5.1 显式操作（同步）

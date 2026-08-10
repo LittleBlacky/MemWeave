@@ -1,6 +1,6 @@
 from concurrent.futures import ThreadPoolExecutor
 from inspect import signature
-from threading import Barrier
+from threading import Barrier, Event as ThreadEvent, Lock
 from uuid import uuid4
 
 import pytest
@@ -358,3 +358,51 @@ def test_projection_checkpoint_save_max_handles_concurrent_initial_insert(tmp_pa
 
     assert max(results) == 8
     assert checkpoint_store.get("recording", "session:race") == 8
+
+
+def test_projection_dispatcher_serializes_same_backend_and_stream():
+    class ConcurrentBackend(RecordingBackend):
+        def __init__(self):
+            super().__init__()
+            self.entered = ThreadEvent()
+            self.release = ThreadEvent()
+            self.active = 0
+            self.max_active = 0
+            self.state_lock = Lock()
+
+        def apply(self, event: Event) -> None:
+            with self.state_lock:
+                self.active += 1
+                self.max_active = max(self.max_active, self.active)
+                self.entered.set()
+            self.release.wait(timeout=5)
+            with self.state_lock:
+                self.active -= 1
+            super().apply(event)
+
+    dispatcher = ProjectionDispatcher()
+    backend = ConcurrentBackend()
+    dispatcher.register_backend(backend)
+
+    def event(seq):
+        return Event(
+            event_id=uuid4(),
+            event_type="code.test_passed",
+            stream_id="session:concurrent",
+            seq=seq,
+            actor="agent:codex",
+            payload={"seq": seq},
+        )
+
+    first = ThreadPoolExecutor(max_workers=2)
+    try:
+        first_future = first.submit(dispatcher.project, event(1))
+        assert backend.entered.wait(timeout=5)
+        second_future = first.submit(dispatcher.project, event(2))
+        backend.release.set()
+        first_future.result(timeout=5)
+        second_future.result(timeout=5)
+    finally:
+        first.shutdown(wait=True)
+
+    assert backend.max_active == 1

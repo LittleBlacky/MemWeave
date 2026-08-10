@@ -369,6 +369,29 @@ git diff --check
 
 本次修订提交：`d12c155 fix: scope projection watermarks per stream`
 
+## Dispatcher 并发投影审查修订
+
+审查发现 `ProjectionDispatcher.project()` 共享 pending 缓存但没有并发保护。两个线程同时处理同一 backend 和 stream 时可能重复调用 `apply()`、竞争删除 pending 事件或产生不一致的水位结果。
+
+修订内容：
+
+- 增加 `(backend_name, stream_id)` 级别的独立可重入锁；
+- 将该 key 的 pending、事件应用和 checkpoint 提交串行化；
+- 不同 backend 或不同 stream 仍可并行投影；
+- 明确后端注册应在开始投影前完成；
+- 增加阻塞 handler 的并发回归测试，验证同一 key 不会同时进入 `apply()`。
+
+验证：
+
+```text
+G:\\Anaconda\\envs\\smallshrimp\\python.exe -m pytest tests/test_storage_ports.py tests/test_events.py tests/test_models.py tests/test_protocol.py -q
+36 passed
+G:\\Anaconda\\envs\\smallshrimp\\python.exe -m compileall -q src
+git diff --check
+```
+
+本次修订提交：`待提交`
+
 ## 乱序事件 checkpoint 审查修订
 
 审查发现 Dispatcher 以“已见到的最大序号”推进 checkpoint。若先收到 `seq=3`，checkpoint 会跳到 3，之后到达的 `seq=1/2` 会被误判为已处理，造成事件永久漏投影。

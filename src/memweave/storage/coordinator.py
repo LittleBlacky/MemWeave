@@ -5,6 +5,7 @@ An optional checkpoint store records successfully applied event watermarks;
 this module still only performs best-effort in-process fan-out.
 """
 
+from threading import Lock, RLock
 from typing import Dict, Tuple
 
 from ..models import Event
@@ -19,6 +20,8 @@ class ProjectionDispatcher:
         self._errors: Dict[str, str] = {}
         self._checkpoint_store = checkpoint_store
         self._pending: Dict[Tuple[str, str], Dict[int, Event]] = {}
+        self._projection_locks: Dict[Tuple[str, str], RLock] = {}
+        self._projection_locks_guard = Lock()
 
     def register_backend(self, backend: EventProjector) -> None:
         if not isinstance(backend, EventProjector):
@@ -33,31 +36,41 @@ class ProjectionDispatcher:
         watermarks: Dict[str, int] = {}
         self._errors = {}
         for name, backend in self._backends.items():
-            try:
-                if self._checkpoint_store is not None:
-                    checkpoint = self._checkpoint_store.get(name, event.stream_id)
-                    if event.seq <= checkpoint:
+            with self._projection_lock(name, event.stream_id):
+                try:
+                    if self._checkpoint_store is not None:
+                        checkpoint = self._checkpoint_store.get(name, event.stream_id)
+                        if event.seq <= checkpoint:
+                            watermarks[name] = checkpoint
+                            continue
+                        pending = self._pending.setdefault((name, event.stream_id), {})
+                        pending.setdefault(event.seq, event)
+                        next_seq = checkpoint + 1
+                        while next_seq in pending:
+                            candidate = pending[next_seq]
+                            backend.apply(candidate)
+                            self._checkpoint_store.save_max(
+                                name, event.stream_id, candidate.seq
+                            )
+                            del pending[next_seq]
+                            checkpoint = candidate.seq
+                            next_seq += 1
                         watermarks[name] = checkpoint
-                        continue
-                    pending = self._pending.setdefault((name, event.stream_id), {})
-                    pending.setdefault(event.seq, event)
-                    next_seq = checkpoint + 1
-                    while next_seq in pending:
-                        candidate = pending[next_seq]
-                        backend.apply(candidate)
-                        self._checkpoint_store.save_max(
-                            name, event.stream_id, candidate.seq
-                        )
-                        del pending[next_seq]
-                        checkpoint = candidate.seq
-                        next_seq += 1
-                    watermarks[name] = checkpoint
-                else:
-                    backend.apply(event)
-                    watermarks[name] = backend.watermark(event.stream_id)
-            except Exception as exc:
-                self._errors[name] = str(exc)
+                    else:
+                        backend.apply(event)
+                        watermarks[name] = backend.watermark(event.stream_id)
+                except Exception as exc:
+                    self._errors[name] = str(exc)
         return watermarks
+
+    def _projection_lock(self, name: str, stream_id: str) -> RLock:
+        key = (name, stream_id)
+        with self._projection_locks_guard:
+            lock = self._projection_locks.get(key)
+            if lock is None:
+                lock = RLock()
+                self._projection_locks[key] = lock
+            return lock
 
     def watermarks(self, stream_id: str) -> Dict[str, int]:
         if not isinstance(stream_id, str) or not stream_id.strip():
