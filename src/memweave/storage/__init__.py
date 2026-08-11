@@ -2,6 +2,7 @@
 
 from .coordinator import ProjectionDispatcher, StorageCoordinator
 from .checkpoints import RelationalProjectionCheckpointStore
+from .recovery import EventReplaySource, ProjectionRuntime, ProjectionRuntimeState
 from .sqlite import SQLiteDatabase
 
 __all__ = [
@@ -9,4 +10,7 @@ __all__ = [
     "ProjectionDispatcher",
     "StorageCoordinator",
     "RelationalProjectionCheckpointStore",
+    "EventReplaySource",
+    "ProjectionRuntime",
+    "ProjectionRuntimeState",
 ]

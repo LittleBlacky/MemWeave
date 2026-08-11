@@ -346,6 +346,26 @@ git diff --check
 
 本次修订提交：`e322cde feat: add projection health reporting`
 
+## ProjectionRuntime 重启恢复审查修订
+
+审查发现乱序 gap 事件只保存在 Dispatcher 内存中，进程重启后 pending 丢失，后续事件无法补齐 checkpoint。为保持 Dispatcher 单一职责，新增独立 `ProjectionRuntime`：
+
+- 通过 `EventReplaySource` 从 EventStore 回放 checkpoint 之后的已提交事件；
+- `RECOVERING` 状态缓存实时事件，恢复成功后按序排空并切换 `READY`；
+- 回放异常进入 `FAILED`，拒绝绕过 Runtime 继续发布；
+- Adapter 只依赖 Runtime 的生命周期 API，不复制恢复逻辑。
+
+验证：
+
+```text
+G:\\Anaconda\\envs\\smallshrimp\\python.exe -m pytest tests/test_storage_ports.py tests/test_events.py tests/test_models.py tests/test_protocol.py tests/test_recovery.py -q
+39 passed
+G:\\Anaconda\\envs\\smallshrimp\\python.exe -m compileall -q src
+git diff --check
+```
+
+本次修订提交：`待提交`
+
 ## 多 stream watermark 语义审查修订
 
 审查发现事件 `seq` 和持久化 checkpoint 都按 `stream_id` 隔离，但 `ProjectionBackend.watermark()` 只有无参数的单一整数，无法同时准确表达多个 stream 的投影进度。

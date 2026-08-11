@@ -211,6 +211,10 @@ SDK 与独立服务共享领域模型，核心 API 包括：`append_event`、`re
 
 Task 2 当前提供的 `ProjectionDispatcher` 负责进程内事件 fan-out，并可通过关系型 checkpoint store 持久化每个 `(projection, stream_id)` 的连续事件水位；`watermark(stream_id)` 和 `watermarks(stream_id)` 均按 stream 查询，不使用跨 stream 的全局整数。`StorageCoordinator` 作为兼容名称保留。Outbox 写入、失败重试、重启恢复和索引重建由后续任务实现，不能把当前分发器当作可靠投递组件。
 
+使用持久化 checkpoint 的应用必须通过独立的 `ProjectionRuntime` 管理恢复生命周期。Runtime 在 `RECOVERING` 状态从 `EventReplaySource` 回放 EventStore 中 checkpoint 之后的事件，并缓存期间到达的实时事件；回放和缓存排空完成后切换为 `READY`，失败则进入 `FAILED` 并拒绝继续投影。Adapter 不应直接绕过 Runtime 调用 Dispatcher；Dispatcher 本身仍只负责进程内事件 fan-out。
+
+Runtime 的恢复 API 只依赖 `list_after(stream_id, seq)` 和 `last_seq(stream_id)` 两个抽象方法。恢复期间 `publish(event)` 进入 per-stream 缓冲，恢复成功后按序排空；应用启动契约必须先调用 `recover(stream_id)`，再把实时事件交给 `publish`。
+
 推荐的职责边界如下：
 
 | 存储端口 | 默认角色 | 一致性 | 可否作为唯一真相 |
