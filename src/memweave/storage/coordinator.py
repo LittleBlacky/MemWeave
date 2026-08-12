@@ -83,6 +83,23 @@ class ProjectionDispatcher:
                 self._errors[name] = str(exc)
         return watermarks
 
+    def replay_from(self, stream_id: str) -> int:
+        """Return the earliest checkpoint that must be replayed for a stream.
+
+        Recovery has to satisfy every registered projection. The slowest
+        projection therefore determines the replay boundary; using the
+        maximum checkpoint could permanently skip events for lagging backends.
+        """
+        if not isinstance(stream_id, str) or not stream_id.strip():
+            raise ValueError("stream_id must not be blank")
+        if self._checkpoint_store is None or not self._backends:
+            return 0
+        checkpoints = [
+            self._checkpoint_store.get(name, stream_id)
+            for name in self._backends
+        ]
+        return min(checkpoints, default=0)
+
     def health(self) -> Dict[str, bool]:
         statuses: Dict[str, bool] = {}
         for name, backend in self._backends.items():

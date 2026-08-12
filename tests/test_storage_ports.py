@@ -360,6 +360,27 @@ def test_projection_checkpoint_save_max_handles_concurrent_initial_insert(tmp_pa
     assert checkpoint_store.get("recording", "session:race") == 8
 
 
+def test_projection_dispatcher_replay_from_uses_slowest_registered_checkpoint(tmp_path):
+    database = SQLiteDatabase(str(tmp_path / "replay-start.db"))
+    checkpoint_store = RelationalProjectionCheckpointStore(database)
+    checkpoint_store.save_max("fast", "session:replay", 5)
+    checkpoint_store.save_max("slow", "session:replay", 3)
+    dispatcher = ProjectionDispatcher(checkpoint_store=checkpoint_store)
+    dispatcher.register_backend(RecordingBackend("fast"))
+    dispatcher.register_backend(RecordingBackend("slow"))
+
+    assert dispatcher.replay_from("session:replay") == 3
+
+
+def test_projection_dispatcher_replay_from_defaults_to_zero_without_checkpoints():
+    dispatcher = ProjectionDispatcher()
+    dispatcher.register_backend(RecordingBackend())
+
+    assert dispatcher.replay_from("session:replay") == 0
+    with pytest.raises(ValueError, match="stream_id must not be blank"):
+        dispatcher.replay_from("   ")
+
+
 def test_projection_dispatcher_serializes_same_backend_and_stream():
     class ConcurrentBackend(RecordingBackend):
         def __init__(self):

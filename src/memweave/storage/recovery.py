@@ -55,7 +55,8 @@ class ProjectionRuntime:
 
         try:
             target_seq = self.event_source.last_seq(stream_id)
-            replay = self.event_source.list_after(stream_id, 0)
+            start_seq = self.dispatcher.replay_from(stream_id)
+            replay = self.event_source.list_after(stream_id, start_seq)
             for event in sorted(replay, key=lambda item: item.seq):
                 if event.seq <= target_seq:
                     self.dispatcher.project(event)

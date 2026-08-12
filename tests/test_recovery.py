@@ -67,6 +67,38 @@ def test_projection_runtime_replays_events_after_dispatcher_restart(tmp_path):
     assert checkpoint_store.get("recording", "session:recovery") == 3
 
 
+def test_projection_runtime_starts_replay_after_slowest_projection_checkpoint(tmp_path):
+    database = SQLiteDatabase(str(tmp_path / "recovery-start.db"))
+    checkpoint_store = RelationalProjectionCheckpointStore(database)
+    checkpoint_store.save_max("fast", "session:start", 5)
+    checkpoint_store.save_max("slow", "session:start", 3)
+
+    class RecordingSource:
+        def __init__(self):
+            self.start_seq = None
+
+        def last_seq(self, stream_id):
+            return 5
+
+        def list_after(self, stream_id, seq):
+            self.start_seq = seq
+            return []
+
+    class NamedBackend(RecordingBackend):
+        def __init__(self, name):
+            super().__init__()
+            self.name = name
+
+    dispatcher = ProjectionDispatcher(checkpoint_store=checkpoint_store)
+    dispatcher.register_backend(NamedBackend("fast"))
+    dispatcher.register_backend(NamedBackend("slow"))
+    source = RecordingSource()
+    from memweave.storage.recovery import ProjectionRuntime
+
+    assert ProjectionRuntime(dispatcher, source).recover("session:start") == 5
+    assert source.start_seq == 3
+
+
 def test_projection_runtime_buffers_live_events_until_recovery_finishes(tmp_path):
     database = SQLiteDatabase(str(tmp_path / "recovery-buffer.db"))
     event_store = EventStore(database)
