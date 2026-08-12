@@ -37,6 +37,24 @@ Agent 只通过受控接口参与
 - [系统设计规格](docs/superpowers/specs/2026-08-29-memory-system-design.md)
 - [开发规范](CONTRIBUTING.md)
 
+## 开发环境
+
+项目使用 `uv` 管理 Python 虚拟环境和依赖。需要先安装 `uv`，然后在仓库根目录执行：
+
+```powershell
+uv sync
+uv run pytest -q
+```
+
+`uv sync` 会根据 `.python-version` 使用 Python 3.11，创建本地 `.venv` 并按 `uv.lock` 安装锁定依赖。日常命令通过 `uv run` 执行，避免依赖当前 shell 是否激活了虚拟环境。
+
+常用检查命令：
+
+```powershell
+uv run python -m compileall -q src
+uv run pytest tests/test_events.py tests/test_storage_ports.py -q
+```
+
 ## 计划路线
 
 1. 最小可靠闭环：事件日志、会话投影、显式记忆 CRUD、长期权威表、Outbox 和基础召回。
