@@ -213,7 +213,7 @@ Task 2 当前提供的 `ProjectionDispatcher` 负责进程内事件 fan-out，�
 
 使用持久化 checkpoint 的应用必须通过独立的 `ProjectionRuntime` 管理恢复生命周期。Runtime 在 `RECOVERING` 状态从 `EventReplaySource` 回放 EventStore 中 checkpoint 之后的事件，并缓存期间到达的实时事件；回放和缓存排空完成后切换为 `READY`，失败则进入 `FAILED` 并拒绝继续投影。Adapter 不应直接绕过 Runtime 调用 Dispatcher；Dispatcher 本身仍只负责进程内事件 fan-out。
 
-Runtime 的恢复 API 只依赖 `list_after(stream_id, seq)` 和 `last_seq(stream_id)` 两个抽象方法。恢复期间 `publish(event)` 进入 per-stream 缓冲，恢复成功后按序排空；应用启动契约必须先调用 `recover(stream_id)`，再把实时事件交给 `publish`。
+Runtime 的恢复 API 只依赖 `list_after(stream_id, seq)` 和 `last_seq(stream_id)` 两个抽象方法。恢复期间 `publish(event)` 进入 per-stream 缓冲，恢复成功后按序排空；应用启动契约必须先调用 `recover(stream_id)`，再把实时事件交给 `publish`。恢复起点由 Dispatcher 按该 stream 所有已注册投影的最小 checkpoint 计算（最慢投影优先），没有持久化 checkpoint 时从 `0` 开始，避免重复扫描完整历史的同时不漏投影事件。
 
 推荐的职责边界如下：
 

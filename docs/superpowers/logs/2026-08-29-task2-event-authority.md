@@ -432,3 +432,22 @@ G:\\Anaconda\\envs\\smallshrimp\\python.exe -m pytest tests/test_storage_ports.p
 G:\\Anaconda\\envs\\smallshrimp\\python.exe -m compileall -q src
 git diff --check
 ```
+
+## Projection 恢复起点优化
+
+问题：`ProjectionRuntime.recover()` 每次都从 `seq=0` 读取事件。长会话重启时会重复扫描已完成投影的历史，恢复耗时随整个事件流增长。
+
+决策：新增 `ProjectionDispatcher.replay_from(stream_id)`，读取所有已注册投影在该 stream 的 checkpoint 并取最小值。最慢投影决定回放起点，既避免无谓的全量扫描，又保证任何投影不会因从最大水位开始而漏事件；未配置 checkpoint 或没有 backend 时返回 `0`。
+
+TDD：RED 测试验证恢复起点错误地为 `0`；GREEN 实现接口并让 Runtime 使用该起点后通过。新增覆盖最慢 checkpoint、无 checkpoint 和空 stream 校验的回归测试。
+
+验证：
+
+```text
+G:\\Anaconda\\envs\\smallshrimp\\python.exe -m pytest tests/test_storage_ports.py tests/test_events.py tests/test_models.py tests/test_protocol.py tests/test_recovery.py -q
+42 passed
+G:\\Anaconda\\envs\\smallshrimp\\python.exe -m compileall -q src
+git diff --check
+```
+
+代码提交：`e253b5b fix: resume projection recovery from checkpoints`

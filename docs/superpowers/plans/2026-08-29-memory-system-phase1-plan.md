@@ -123,7 +123,7 @@ docs/superpowers/logs/
 **Interfaces:**
 - `RelationalDatabase.begin()`, `RelationalDatabase.read()`, and `RelationalDatabase.apply_migrations()`.
 - `EventRepository.append(stream_id, event_type, payload, actor, request_id, event_id=None, occurred_at=None, causation_id=None, correlation_id=None, idempotency_key=None) -> Event`; `list_after(stream_id, seq) -> list[Event]`; `last_seq(stream_id) -> int`.
-- `EventProjector.apply(event)`, `ProjectionDispatcher.register_backend(backend)`, `project(event)`, `watermarks(stream_id) -> dict[str, int]`, and `health() -> dict[str, bool]`; `StorageCoordinator` is retained as a compatibility alias.
+- `EventProjector.apply(event)`, `ProjectionDispatcher.register_backend(backend)`, `project(event)`, `watermarks(stream_id) -> dict[str, int]`, `replay_from(stream_id) -> int`, and `health() -> dict[str, bool]`; `replay_from` returns the minimum checkpoint across registered projections so restart recovery can begin at the slowest backend without skipping events. `StorageCoordinator` is retained as a compatibility alias.
 - `EventReplaySource.list_after(stream_id, seq)`, `last_seq(stream_id)`, and `ProjectionRuntime.recover(stream_id) -> int` / `publish(event)` provide explicit per-stream restart recovery without coupling the dispatcher to a concrete event store.
 - `VectorIndex`, `GraphStore`, and `KeywordIndex` are independent memory-index ports with `upsert`, `delete`, and health/watermark methods; they are not event projectors. Phase 1 provides no external concrete index implementation.
 
