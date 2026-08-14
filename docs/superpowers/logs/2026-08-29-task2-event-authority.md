@@ -451,3 +451,22 @@ git diff --check
 ```
 
 代码提交：`e253b5b fix: resume projection recovery from checkpoints`
+
+## 幂等投影故障窗口修复
+
+问题：投影 `apply()` 成功后 checkpoint 保存失败时，重试会再次执行同一事件。该行为对非幂等后端可能产生重复记忆或重复外部副作用。
+
+决策：复用已有 `ProjectionBackend.watermark(stream_id)` 契约，将其定义为后端已实际应用的连续水位。启用 checkpoint 的 Dispatcher 在调用 `apply()` 前先检查后端水位；若候选事件序号已经被后端应用，则跳过副作用，仅补写 checkpoint。需要跨进程/重启去重的后端必须持久化自身水位或按 event_id 实现幂等 upsert；Task 2 不宣称任意外部副作用 exactly-once。
+
+TDD：新增故障注入测试，第一次 checkpoint 写入失败，第二次投影只恢复 checkpoint 且 backend 事件列表仍只有一条。
+
+验证：
+
+```text
+G:\\Anaconda\\envs\\smallshrimp\\python.exe -m pytest tests/test_storage_ports.py tests/test_events.py tests/test_models.py tests/test_protocol.py tests/test_recovery.py -q
+43 passed
+G:\\Anaconda\\envs\\smallshrimp\\python.exe -m compileall -q src
+git diff --check
+```
+
+代码提交：`10ee955 fix: suppress duplicate projection side effects`

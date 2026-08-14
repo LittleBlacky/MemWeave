@@ -209,7 +209,7 @@ SDK 与独立服务共享领域模型，核心 API 包括：`append_event`、`re
 
 `StorageCoordinator` 负责将一条权威记忆分发到多个存储后端，但不把这些后端混为一个事务。其最小能力包括：注册/注销后端、按记忆种类和作用域路由、写入 Outbox、读取各后端 watermark、报告健康状态，以及在索引损坏时从权威表重建。
 
-Task 2 当前提供的 `ProjectionDispatcher` 负责进程内事件 fan-out，并可通过关系型 checkpoint store 持久化每个 `(projection, stream_id)` 的连续事件水位；`watermark(stream_id)` 和 `watermarks(stream_id)` 均按 stream 查询，不使用跨 stream 的全局整数。`StorageCoordinator` 作为兼容名称保留。Outbox 写入、失败重试、重启恢复和索引重建由后续任务实现，不能把当前分发器当作可靠投递组件。
+Task 2 当前提供的 `ProjectionDispatcher` 负责进程内事件 fan-out，并可通过关系型 checkpoint store 持久化每个 `(projection, stream_id)` 的连续事件水位；`watermark(stream_id)` 和 `watermarks(stream_id)` 均按 stream 查询，不使用跨 stream 的全局整数。投影后端的 `watermark(stream_id)` 必须表示其已实际应用的连续水位；Dispatcher 在推进 checkpoint 前会用它抑制“投影副作用已成功但 checkpoint 保存失败”后的重复 apply。需要跨进程/重启去重时，后端必须持久化该水位或使用自身的 event_id 幂等 upsert。`StorageCoordinator` 作为兼容名称保留。Outbox 写入、失败重试、重启恢复和索引重建由后续任务实现，不能把当前分发器当作可靠投递组件。
 
 使用持久化 checkpoint 的应用必须通过独立的 `ProjectionRuntime` 管理恢复生命周期。Runtime 在 `RECOVERING` 状态从 `EventReplaySource` 回放 EventStore 中 checkpoint 之后的事件，并缓存期间到达的实时事件；回放和缓存排空完成后切换为 `READY`，失败则进入 `FAILED` 并拒绝继续投影。Adapter 不应直接绕过 Runtime 调用 Dispatcher；Dispatcher 本身仍只负责进程内事件 fan-out。
 
