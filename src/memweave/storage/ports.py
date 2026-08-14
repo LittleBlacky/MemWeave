@@ -57,6 +57,12 @@ class ProjectionBackend(Protocol):
         ...
 
     def watermark(self, stream_id: str) -> int:
+        """Return the highest contiguous sequence applied by this backend.
+
+        Implementations must make this value durable when they need duplicate
+        suppression across process restarts. It is also used to close the
+        failure window between a successful apply and checkpoint persistence.
+        """
         ...
 
 

@@ -381,6 +381,40 @@ def test_projection_dispatcher_replay_from_defaults_to_zero_without_checkpoints(
         dispatcher.replay_from("   ")
 
 
+def test_projection_dispatcher_uses_backend_watermark_to_avoid_reapplying_after_checkpoint_failure():
+    class FailOnceCheckpointStore:
+        def __init__(self):
+            self.value = 0
+            self.failed = False
+
+        def get(self, projection, stream_id):
+            return self.value
+
+        def save_max(self, projection, stream_id, seq):
+            if not self.failed:
+                self.failed = True
+                raise RuntimeError("checkpoint unavailable")
+            self.value = max(self.value, seq)
+            return self.value
+
+    checkpoint_store = FailOnceCheckpointStore()
+    dispatcher = ProjectionDispatcher(checkpoint_store=checkpoint_store)
+    backend = RecordingBackend()
+    dispatcher.register_backend(backend)
+    event = Event(
+        event_id=uuid4(),
+        event_type="code.test_passed",
+        stream_id="session:idempotent",
+        seq=1,
+        actor="agent:codex",
+        payload={},
+    )
+
+    assert dispatcher.project(event) == {}
+    assert dispatcher.project(event) == {"recording": 1}
+    assert backend.events == [event.event_id]
+
+
 def test_projection_dispatcher_serializes_same_backend_and_stream():
     class ConcurrentBackend(RecordingBackend):
         def __init__(self):

@@ -48,7 +48,13 @@ class ProjectionDispatcher:
                         next_seq = checkpoint + 1
                         while next_seq in pending:
                             candidate = pending[next_seq]
-                            backend.apply(candidate)
+                            # The backend watermark reflects the side effect
+                            # that actually reached the projector. If the
+                            # checkpoint write failed after apply(), a retry
+                            # must advance the checkpoint without applying the
+                            # same event a second time.
+                            if backend.watermark(event.stream_id) < candidate.seq:
+                                backend.apply(candidate)
                             self._checkpoint_store.save_max(
                                 name, event.stream_id, candidate.seq
                             )
