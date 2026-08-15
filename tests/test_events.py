@@ -138,3 +138,19 @@ def test_append_persists_protocol_and_causality_metadata(tmp_path):
     assert restored.causation_id == causation_id
     assert restored.correlation_id == correlation_id
     assert restored.payload == {"exit_code": 1}
+
+
+def test_event_store_rejects_invalid_public_arguments(tmp_path):
+    store = EventStore(Database(str(tmp_path / "invalid-arguments.db")))
+
+    with pytest.raises(TypeError, match="stream_id must be a string"):
+        store.append(None, EventType.USER_MESSAGE, {}, "user:u1", request_id=uuid4())
+    with pytest.raises(ValueError, match="stream_id must not be blank"):
+        store.append("   ", EventType.USER_MESSAGE, {}, "user:u1", request_id=uuid4())
+    with pytest.raises(TypeError, match="payload must be a dictionary"):
+        store.append("session:s1", EventType.USER_MESSAGE, [], "user:u1", request_id=uuid4())
+
+    with pytest.raises(TypeError, match="stream_id must be a string"):
+        store.list_after(None, 0)
+    with pytest.raises(ValueError, match="seq must not be negative"):
+        store.list_after("session:s1", -1)

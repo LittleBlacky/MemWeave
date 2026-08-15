@@ -41,12 +41,18 @@ class EventStore:
         correlation_id: Optional[UUID] = None,
         idempotency_key: Optional[str] = None,
     ) -> Event:
+        if not isinstance(stream_id, str):
+            raise TypeError("stream_id must be a string")
         if not stream_id.strip():
             raise ValueError("stream_id must not be blank")
+        if not isinstance(actor, str):
+            raise TypeError("actor must be a string")
         if not actor.strip():
             raise ValueError("actor must not be blank")
         if not isinstance(request_id, UUID):
             raise TypeError("request_id must be a UUID")
+        if not isinstance(payload, dict):
+            raise TypeError("payload must be a dictionary")
 
         event_id = event_id or uuid4()
         occurred_at_was_provided = occurred_at is not None
@@ -185,6 +191,8 @@ class EventStore:
         return False
 
     def list_after(self, stream_id: str, seq: int) -> list[Event]:
+        self._validate_stream_id(stream_id)
+        self._validate_seq(seq)
         with self.database.read() as connection:
             rows = connection.execute(
                 select(events_table)
@@ -194,6 +202,7 @@ class EventStore:
         return [self._row_to_event(row) for row in rows]
 
     def last_seq(self, stream_id: str) -> int:
+        self._validate_stream_id(stream_id)
         with self.database.read() as connection:
             value = connection.execute(
                 select(stream_heads_table.c.last_seq).where(
@@ -201,6 +210,20 @@ class EventStore:
                 )
             ).scalar_one_or_none()
         return int(value or 0)
+
+    @staticmethod
+    def _validate_stream_id(stream_id: str) -> None:
+        if not isinstance(stream_id, str):
+            raise TypeError("stream_id must be a string")
+        if not stream_id.strip():
+            raise ValueError("stream_id must not be blank")
+
+    @staticmethod
+    def _validate_seq(seq: int) -> None:
+        if not isinstance(seq, int) or isinstance(seq, bool):
+            raise TypeError("seq must be an integer")
+        if seq < 0:
+            raise ValueError("seq must not be negative")
 
     @staticmethod
     def _matches_existing(row: Mapping[str, Any], values: Mapping[str, Any]) -> bool:

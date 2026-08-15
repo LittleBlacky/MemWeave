@@ -17,6 +17,8 @@ class RelationalProjectionCheckpointStore(ProjectionCheckpointStore):
         self.max_retries = max_retries
 
     def get(self, projection: str, stream_id: str) -> int:
+        self._validate_text(projection, "projection")
+        self._validate_text(stream_id, "stream_id")
         with self.database.read() as connection:
             value = connection.execute(
                 select(projection_watermarks_table.c.last_seq).where(
@@ -27,6 +29,10 @@ class RelationalProjectionCheckpointStore(ProjectionCheckpointStore):
         return int(value or 0)
 
     def save_max(self, projection: str, stream_id: str, seq: int) -> int:
+        self._validate_text(projection, "projection")
+        self._validate_text(stream_id, "stream_id")
+        if not isinstance(seq, int) or isinstance(seq, bool):
+            raise TypeError("seq must be an integer")
         if seq < 0:
             raise ValueError("seq must not be negative")
         for attempt in range(self.max_retries + 1):
@@ -38,6 +44,13 @@ class RelationalProjectionCheckpointStore(ProjectionCheckpointStore):
                 time.sleep(0.005 * (2**attempt))
 
         raise AssertionError("unreachable")
+
+    @staticmethod
+    def _validate_text(value: str, name: str) -> None:
+        if not isinstance(value, str):
+            raise TypeError(f"{name} must be a string")
+        if not value.strip():
+            raise ValueError(f"{name} must not be blank")
 
     def _save_max_once(self, projection: str, stream_id: str, seq: int) -> int:
         with self.database.begin() as connection:

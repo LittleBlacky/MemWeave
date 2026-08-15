@@ -26,6 +26,8 @@ class ProjectionDispatcher:
     def register_backend(self, backend: EventProjector) -> None:
         if not isinstance(backend, EventProjector):
             raise TypeError("backend must implement EventProjector")
+        if not isinstance(backend.name, str):
+            raise TypeError("backend name must be a string")
         if not backend.name.strip():
             raise ValueError("backend name must not be blank")
         if backend.name in self._backends:
@@ -33,6 +35,8 @@ class ProjectionDispatcher:
         self._backends[backend.name] = backend
 
     def project(self, event: Event) -> Dict[str, int]:
+        if not isinstance(event, Event):
+            raise TypeError("event must be an Event")
         watermarks: Dict[str, int] = {}
         self._errors = {}
         for name, backend in self._backends.items():

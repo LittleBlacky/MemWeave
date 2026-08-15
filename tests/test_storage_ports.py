@@ -251,6 +251,20 @@ def test_projection_dispatcher_health_isolates_backend_failures():
     assert dispatcher.errors() == {"broken-health": "health unavailable"}
 
 
+def test_projection_dispatcher_rejects_invalid_backend_and_event_arguments():
+    dispatcher = ProjectionDispatcher()
+
+    class InvalidNameBackend(RecordingBackend):
+        def __init__(self):
+            super().__init__()
+            self.name = None
+
+    with pytest.raises(TypeError, match="backend name must be a string"):
+        dispatcher.register_backend(InvalidNameBackend())
+    with pytest.raises(TypeError, match="event must be an Event"):
+        dispatcher.project(None)
+
+
 def test_projection_checkpoint_survives_dispatcher_recreation(tmp_path):
     database = SQLiteDatabase(str(tmp_path / "checkpoints.db"))
     checkpoint_store = RelationalProjectionCheckpointStore(database)
@@ -288,6 +302,16 @@ def test_projection_checkpoint_is_monotonic(tmp_path):
     assert checkpoint_store.save_max("recording", "session:s1", 7) == 7
     assert checkpoint_store.save_max("recording", "session:s1", 5) == 7
     assert checkpoint_store.get("recording", "session:s1") == 7
+
+
+def test_projection_checkpoint_store_rejects_invalid_identifiers(tmp_path):
+    database = SQLiteDatabase(str(tmp_path / "checkpoint-invalid.db"))
+    checkpoint_store = RelationalProjectionCheckpointStore(database)
+
+    with pytest.raises(TypeError, match="projection must be a string"):
+        checkpoint_store.get(None, "session:s1")
+    with pytest.raises(ValueError, match="stream_id must not be blank"):
+        checkpoint_store.get("recording", "   ")
 
 
 def test_projection_watermarks_are_isolated_per_stream():
