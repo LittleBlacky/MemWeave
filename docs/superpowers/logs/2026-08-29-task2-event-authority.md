@@ -470,3 +470,22 @@ git diff --check
 ```
 
 代码提交：`10ee955 fix: suppress duplicate projection side effects`
+
+## 公共接口输入校验修复
+
+问题：EventStore、ProjectionDispatcher 和 checkpoint store 对非法类型、空标识符和非法序号的校验不一致，可能向调用方暴露 `AttributeError` 或静默接受错误参数。
+
+决策：统一公开入口错误语义：非字符串/非预期对象类型抛 `TypeError`，空字符串和负序号抛 `ValueError`。补充 EventStore 的 stream/payload/seq、Dispatcher 的 event/backend name，以及 checkpoint store 的 projection/stream/seq 校验。
+
+TDD：先新增非法参数测试并确认现有实现失败，再加入最小校验实现；聚焦测试 3 passed，Task 2 相关回归测试 34 passed。
+
+验证：
+
+```text
+G:\\Anaconda\\envs\\smallshrimp\\python.exe -m pytest tests/test_storage_ports.py tests/test_events.py tests/test_models.py tests/test_protocol.py tests/test_recovery.py -q
+46 passed
+G:\\Anaconda\\envs\\smallshrimp\\python.exe -m compileall -q src
+git diff --check
+```
+
+代码提交：`04cf4f2 fix: validate storage and projection inputs`

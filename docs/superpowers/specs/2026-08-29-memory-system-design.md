@@ -211,6 +211,8 @@ SDK 与独立服务共享领域模型，核心 API 包括：`append_event`、`re
 
 Task 2 当前提供的 `ProjectionDispatcher` 负责进程内事件 fan-out，并可通过关系型 checkpoint store 持久化每个 `(projection, stream_id)` 的连续事件水位；`watermark(stream_id)` 和 `watermarks(stream_id)` 均按 stream 查询，不使用跨 stream 的全局整数。投影后端的 `watermark(stream_id)` 必须表示其已实际应用的连续水位；Dispatcher 在推进 checkpoint 前会用它抑制“投影副作用已成功但 checkpoint 保存失败”后的重复 apply。需要跨进程/重启去重时，后端必须持久化该水位或使用自身的 event_id 幂等 upsert。`StorageCoordinator` 作为兼容名称保留。Outbox 写入、失败重试、重启恢复和索引重建由后续任务实现，不能把当前分发器当作可靠投递组件。
 
+Task 2 的公开存储和投影入口统一校验参数：非字符串标识符或非预期对象类型抛出 `TypeError`，空字符串或负序号抛出 `ValueError`。调用方不得依赖底层数据库或 Python 属性访问产生的 `AttributeError` 来判断请求错误。
+
 使用持久化 checkpoint 的应用必须通过独立的 `ProjectionRuntime` 管理恢复生命周期。Runtime 在 `RECOVERING` 状态从 `EventReplaySource` 回放 EventStore 中 checkpoint 之后的事件，并缓存期间到达的实时事件；回放和缓存排空完成后切换为 `READY`，失败则进入 `FAILED` 并拒绝继续投影。Adapter 不应直接绕过 Runtime 调用 Dispatcher；Dispatcher 本身仍只负责进程内事件 fan-out。
 
 Runtime 的恢复 API 只依赖 `list_after(stream_id, seq)` 和 `last_seq(stream_id)` 两个抽象方法。恢复期间 `publish(event)` 进入 per-stream 缓冲，恢复成功后按序排空；应用启动契约必须先调用 `recover(stream_id)`，再把实时事件交给 `publish`。恢复起点由 Dispatcher 按该 stream 所有已注册投影的最小 checkpoint 计算（最慢投影优先），没有持久化 checkpoint 时从 `0` 开始，避免重复扫描完整历史的同时不漏投影事件。
