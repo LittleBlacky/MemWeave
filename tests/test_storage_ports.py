@@ -54,6 +54,22 @@ def test_default_migration_runner_discovers_packaged_migrations():
     ]
 
 
+def test_migration_runner_applied_returns_empty_only_when_table_is_missing(tmp_path):
+    database = SQLAlchemyDatabase(f"sqlite+pysqlite:///{tmp_path / 'unmigrated.db'}")
+    runner = MigrationRunner()
+    with database.read() as connection:
+        assert runner.applied(connection) == []
+
+
+def test_migration_runner_applied_propagates_unexpected_database_errors():
+    class BrokenConnection:
+        def execute(self, *args, **kwargs):
+            raise RuntimeError("database connection lost")
+
+    with pytest.raises(RuntimeError, match="database connection lost"):
+        MigrationRunner().applied(BrokenConnection())
+
+
 def test_generic_sqlalchemy_database_can_apply_core_migration(tmp_path):
     database = SQLAlchemyDatabase(f"sqlite+pysqlite:///{tmp_path / 'generic.db'}")
 
