@@ -489,3 +489,22 @@ git diff --check
 ```
 
 代码提交：`04cf4f2 fix: validate storage and projection inputs`
+
+## MigrationRunner 异常边界修复
+
+问题：`MigrationRunner.applied()` 捕获所有异常并返回空列表，数据库连接失败或 SQL 错误会被误报为“没有已应用迁移”。
+
+决策：仅对 SQLAlchemy 操作错误中明确表示 `schema_migrations` 表不存在的情况返回 `[]`；其它 `OperationalError` 继续抛出，非 SQLAlchemy 异常也不再被吞掉。
+
+TDD：新增缺表正常路径和连接异常传播测试；先确认异常测试失败，再实现窄化捕获。
+
+验证：
+
+```text
+G:\\Anaconda\\envs\\smallshrimp\\python.exe -m pytest tests/test_storage_ports.py tests/test_events.py tests/test_recovery.py -q
+36 passed
+G:\\Anaconda\\envs\\smallshrimp\\python.exe -m compileall -q src
+git diff --check
+```
+
+代码提交：`e9b904f fix: preserve unexpected migration errors`
