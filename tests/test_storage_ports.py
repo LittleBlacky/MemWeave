@@ -281,6 +281,39 @@ def test_projection_dispatcher_rejects_invalid_backend_and_event_arguments():
         dispatcher.project(None)
 
 
+def test_projection_dispatcher_bounds_gap_pending_cache_and_supports_explicit_clear(tmp_path):
+    database = SQLiteDatabase(str(tmp_path / "gap-limit.db"))
+    checkpoint_store = RelationalProjectionCheckpointStore(database)
+    dispatcher = ProjectionDispatcher(
+        checkpoint_store=checkpoint_store,
+        max_pending_events=2,
+    )
+    backend = RecordingBackend()
+    dispatcher.register_backend(backend)
+
+    def event(seq):
+        return Event(
+            event_id=uuid4(),
+            event_type="code.test_passed",
+            stream_id="session:gap-limit",
+            seq=seq,
+            actor="agent:codex",
+            payload={},
+        )
+
+    assert dispatcher.project(event(3)) == {"recording": 0}
+    assert dispatcher.project(event(4)) == {"recording": 0}
+    assert dispatcher.project(event(5)) == {}
+    assert "pending gap buffer full" in dispatcher.errors()["recording"]
+    assert dispatcher.clear_pending("session:gap-limit") == 2
+    assert dispatcher.clear_pending("session:gap-limit") == 0
+
+
+def test_projection_dispatcher_rejects_invalid_pending_capacity():
+    with pytest.raises(ValueError, match="max_pending_events must be positive"):
+        ProjectionDispatcher(max_pending_events=0)
+
+
 def test_projection_checkpoint_survives_dispatcher_recreation(tmp_path):
     database = SQLiteDatabase(str(tmp_path / "checkpoints.db"))
     checkpoint_store = RelationalProjectionCheckpointStore(database)

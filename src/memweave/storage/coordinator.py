@@ -15,10 +15,19 @@ from .ports import EventProjector, ProjectionCheckpointStore
 class ProjectionDispatcher:
     """Best-effort in-process fan-out for event projectors."""
 
-    def __init__(self, checkpoint_store: ProjectionCheckpointStore | None = None) -> None:
+    def __init__(
+        self,
+        checkpoint_store: ProjectionCheckpointStore | None = None,
+        max_pending_events: int = 10_000,
+    ) -> None:
+        if not isinstance(max_pending_events, int) or isinstance(max_pending_events, bool):
+            raise TypeError("max_pending_events must be an integer")
+        if max_pending_events < 1:
+            raise ValueError("max_pending_events must be positive")
         self._backends: Dict[str, EventProjector] = {}
         self._errors: Dict[str, str] = {}
         self._checkpoint_store = checkpoint_store
+        self.max_pending_events = max_pending_events
         self._pending: Dict[Tuple[str, str], Dict[int, Event]] = {}
         self._projection_locks: Dict[Tuple[str, str], RLock] = {}
         self._projection_locks_guard = Lock()
@@ -48,6 +57,14 @@ class ProjectionDispatcher:
                             watermarks[name] = checkpoint
                             continue
                         pending = self._pending.setdefault((name, event.stream_id), {})
+                        if (
+                            event.seq not in pending
+                            and len(pending) >= self.max_pending_events
+                        ):
+                            raise RuntimeError(
+                                "pending gap buffer full for "
+                                f"projection={name}, stream_id={event.stream_id}"
+                            )
                         pending.setdefault(event.seq, event)
                         next_seq = checkpoint + 1
                         while next_seq in pending:
@@ -109,6 +126,16 @@ class ProjectionDispatcher:
             for name in self._backends
         ]
         return min(checkpoints, default=0)
+
+    def clear_pending(self, stream_id: str) -> int:
+        """Drop buffered gap events after the caller has replayed the source log."""
+        if not isinstance(stream_id, str) or not stream_id.strip():
+            raise ValueError("stream_id must not be blank")
+        removed = 0
+        for name in self._backends:
+            with self._projection_lock(name, stream_id):
+                removed += len(self._pending.pop((name, stream_id), {}))
+        return removed
 
     def health(self) -> Dict[str, bool]:
         statuses: Dict[str, bool] = {}
