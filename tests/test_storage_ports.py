@@ -247,7 +247,9 @@ def test_projection_dispatcher_watermarks_isolate_backend_failures():
     dispatcher.register_backend(BrokenWatermarkBackend())
 
     assert dispatcher.watermarks("session:s1") == {"recording": 0}
-    assert dispatcher.errors() == {"broken-watermark": "watermark unavailable"}
+    assert dispatcher.errors() == {
+        "session:s1": {"broken-watermark": "watermark unavailable"}
+    }
 
 
 class BrokenHealthBackend(RecordingBackend):
@@ -264,7 +266,40 @@ def test_projection_dispatcher_health_isolates_backend_failures():
     dispatcher.register_backend(BrokenHealthBackend())
 
     assert dispatcher.health() == {"recording": True, "broken-health": False}
-    assert dispatcher.errors() == {"broken-health": "health unavailable"}
+    assert dispatcher.errors() == {
+        "__system__": {"broken-health": "health unavailable"}
+    }
+
+
+def test_projection_dispatcher_keeps_errors_isolated_between_streams():
+    class SelectiveFailureBackend(RecordingBackend):
+        def apply(self, event):
+            if event.stream_id == "session:error":
+                raise RuntimeError("stream projection failed")
+            super().apply(event)
+
+    dispatcher = ProjectionDispatcher()
+    dispatcher.register_backend(SelectiveFailureBackend())
+
+    def event(stream_id):
+        return Event(
+            event_id=uuid4(),
+            event_type="code.test_passed",
+            stream_id=stream_id,
+            seq=1,
+            actor="agent:codex",
+            payload={},
+        )
+
+    dispatcher.project(event("session:error"))
+    dispatcher.project(event("session:healthy"))
+
+    assert dispatcher.errors() == {
+        "session:error": {"recording": "stream projection failed"}
+    }
+    assert dispatcher.errors("session:error") == {
+        "recording": "stream projection failed"
+    }
 
 
 def test_projection_dispatcher_rejects_invalid_backend_and_event_arguments():
@@ -304,7 +339,7 @@ def test_projection_dispatcher_bounds_gap_pending_cache_and_supports_explicit_cl
     assert dispatcher.project(event(3)) == {"recording": 0}
     assert dispatcher.project(event(4)) == {"recording": 0}
     assert dispatcher.project(event(5)) == {}
-    assert "pending gap buffer full" in dispatcher.errors()["recording"]
+    assert "pending gap buffer full" in dispatcher.errors()["session:gap-limit"]["recording"]
     assert dispatcher.clear_pending("session:gap-limit") == 2
     assert dispatcher.clear_pending("session:gap-limit") == 0
 

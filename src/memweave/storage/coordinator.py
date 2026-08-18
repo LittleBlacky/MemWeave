@@ -25,7 +25,8 @@ class ProjectionDispatcher:
         if max_pending_events < 1:
             raise ValueError("max_pending_events must be positive")
         self._backends: Dict[str, EventProjector] = {}
-        self._errors: Dict[str, str] = {}
+        self._errors: Dict[str, Dict[str, str]] = {}
+        self._errors_lock = Lock()
         self._checkpoint_store = checkpoint_store
         self.max_pending_events = max_pending_events
         self._pending: Dict[Tuple[str, str], Dict[int, Event]] = {}
@@ -47,7 +48,6 @@ class ProjectionDispatcher:
         if not isinstance(event, Event):
             raise TypeError("event must be an Event")
         watermarks: Dict[str, int] = {}
-        self._errors = {}
         for name, backend in self._backends.items():
             with self._projection_lock(name, event.stream_id):
                 try:
@@ -55,6 +55,7 @@ class ProjectionDispatcher:
                         checkpoint = self._checkpoint_store.get(name, event.stream_id)
                         if event.seq <= checkpoint:
                             watermarks[name] = checkpoint
+                            self._clear_error(event.stream_id, name)
                             continue
                         pending = self._pending.setdefault((name, event.stream_id), {})
                         if (
@@ -83,11 +84,14 @@ class ProjectionDispatcher:
                             checkpoint = candidate.seq
                             next_seq += 1
                         watermarks[name] = checkpoint
+                        if checkpoint >= event.seq:
+                            self._clear_error(event.stream_id, name)
                     else:
                         backend.apply(event)
                         watermarks[name] = backend.watermark(event.stream_id)
+                        self._clear_error(event.stream_id, name)
                 except Exception as exc:
-                    self._errors[name] = str(exc)
+                    self._record_error(event.stream_id, name, str(exc))
         return watermarks
 
     def _projection_lock(self, name: str, stream_id: str) -> RLock:
@@ -107,7 +111,7 @@ class ProjectionDispatcher:
             try:
                 watermarks[name] = backend.watermark(stream_id)
             except Exception as exc:
-                self._errors[name] = str(exc)
+                self._record_error(stream_id, name, str(exc))
         return watermarks
 
     def replay_from(self, stream_id: str) -> int:
@@ -144,11 +148,34 @@ class ProjectionDispatcher:
                 statuses[name] = bool(backend.health())
             except Exception as exc:
                 statuses[name] = False
-                self._errors[name] = str(exc)
+                self._record_error("__system__", name, str(exc))
         return statuses
 
-    def errors(self) -> Dict[str, str]:
-        return dict(self._errors)
+    def errors(self, stream_id: str | None = None):
+        """Return a snapshot of projection errors, optionally for one stream."""
+        if stream_id is not None:
+            if not isinstance(stream_id, str) or not stream_id.strip():
+                raise ValueError("stream_id must not be blank")
+        with self._errors_lock:
+            if stream_id is not None:
+                return dict(self._errors.get(stream_id, {}))
+            return {
+                scope: dict(errors)
+                for scope, errors in self._errors.items()
+            }
+
+    def _record_error(self, scope: str, name: str, message: str) -> None:
+        with self._errors_lock:
+            self._errors.setdefault(scope, {})[name] = message
+
+    def _clear_error(self, scope: str, name: str) -> None:
+        with self._errors_lock:
+            errors = self._errors.get(scope)
+            if errors is None:
+                return
+            errors.pop(name, None)
+            if not errors:
+                self._errors.pop(scope, None)
 
 
 # Compatibility name retained for callers written against the Task 2 API.
