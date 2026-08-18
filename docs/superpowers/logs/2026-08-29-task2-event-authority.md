@@ -508,3 +508,22 @@ git diff --check
 ```
 
 代码提交：`e9b904f fix: preserve unexpected migration errors`
+
+## Pending gap 缓存上限与清理
+
+问题：启用 checkpoint 时，乱序事件会暂存在 per-stream pending 字典；如果缺失序号永久不到达，缓存会无限增长并长期占用进程内存。
+
+决策：`ProjectionDispatcher` 新增可配置的 `max_pending_events`（默认 10,000）。达到上限后拒绝新的缺口事件并通过 `errors()` 报告 overflow，避免无界内存增长；新增 `clear_pending(stream_id)` 显式清理缓存。清理前必须先从 EventStore 重放权威事件，清理只影响内存缓存，不删除事实事件。
+
+TDD：先新增容量上限、overflow 报告和显式清理测试并确认构造函数缺少参数而失败，再实现最小限制与清理接口。
+
+验证：
+
+```text
+G:\\Anaconda\\envs\\smallshrimp\\python.exe -m pytest tests/test_storage_ports.py tests/test_events.py tests/test_models.py tests/test_protocol.py tests/test_recovery.py -q
+50 passed
+G:\\Anaconda\\envs\\smallshrimp\\python.exe -m compileall -q src
+git diff --check
+```
+
+代码提交：`b2d0f1e fix: bound projection gap buffers`
