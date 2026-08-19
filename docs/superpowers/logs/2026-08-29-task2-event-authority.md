@@ -527,3 +527,22 @@ git diff --check
 ```
 
 代码提交：`b2d0f1e fix: bound projection gap buffers`
+
+## Projection 错误状态按 stream 隔离
+
+问题：`ProjectionDispatcher.project()` 每次调用都会重置全局 `_errors`，并且错误只按 backend 名称索引。多 stream 并发或连续投影时，一个 stream 的成功调用可能清除另一个 stream 的失败信息。
+
+决策：错误状态改为按 `stream_id -> backend -> message` 保存，并使用独立锁保护；`errors()` 返回分组快照，`errors(stream_id)` 返回单 stream 视图。健康检查使用 `__system__` scope，水位查询按对应 stream 记录。成功重试只清除对应 stream/backend 条目。
+
+TDD：新增跨 stream 错误保留测试，并更新健康、水位和 pending overflow 测试断言；先确认旧实现失败，再完成最小实现。
+
+验证：
+
+```text
+G:\\Anaconda\\envs\\smallshrimp\\python.exe -m pytest tests/test_storage_ports.py tests/test_events.py tests/test_models.py tests/test_protocol.py tests/test_recovery.py -q
+51 passed
+G:\\Anaconda\\envs\\smallshrimp\\python.exe -m compileall -q src
+git diff --check
+```
+
+代码提交：`0307db0 fix: isolate projection errors by stream`
