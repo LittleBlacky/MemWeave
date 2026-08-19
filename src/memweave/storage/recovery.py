@@ -96,7 +96,7 @@ class ProjectionRuntime:
             return self.dispatcher.project(event)
 
     def _raise_on_dispatch_error(self, stream_id: str) -> None:
-        errors = self.dispatcher.errors()
+        errors = self.dispatcher.errors(stream_id)
         if errors:
             raise RuntimeError(f"projection failed during recovery for {stream_id}: {errors}")
 

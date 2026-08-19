@@ -169,3 +169,48 @@ def test_projection_runtime_enters_failed_state_when_recovery_errors():
                 payload={},
             )
         )
+
+
+def test_projection_runtime_ignores_errors_from_other_streams_during_recovery():
+    class SelectiveFailureBackend(RecordingBackend):
+        def apply(self, event):
+            if event.stream_id == "session:failed":
+                raise RuntimeError("failed stream")
+            super().apply(event)
+
+    dispatcher = ProjectionDispatcher()
+    backend = SelectiveFailureBackend()
+    dispatcher.register_backend(backend)
+    failed_event = Event(
+        event_id=uuid4(),
+        event_type="code.test_passed",
+        stream_id="session:failed",
+        seq=1,
+        actor="agent:codex",
+        payload={},
+    )
+    dispatcher.project(failed_event)
+
+    healthy_event = Event(
+        event_id=uuid4(),
+        event_type="code.test_passed",
+        stream_id="session:healthy",
+        seq=1,
+        actor="agent:codex",
+        payload={},
+    )
+
+    class HealthySource:
+        def last_seq(self, stream_id):
+            return 1
+
+        def list_after(self, stream_id, seq):
+            return [healthy_event]
+
+    from memweave.storage.recovery import ProjectionRuntime, ProjectionRuntimeState
+
+    runtime = ProjectionRuntime(dispatcher, HealthySource())
+
+    assert runtime.recover("session:healthy") == 1
+    assert runtime.state("session:healthy") is ProjectionRuntimeState.READY
+    assert backend.events == [healthy_event.event_id]
