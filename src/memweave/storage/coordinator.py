@@ -61,6 +61,7 @@ class ProjectionDispatcher:
                         if (
                             event.seq not in pending
                             and len(pending) >= self.max_pending_events
+                            and event.seq != checkpoint + 1
                         ):
                             raise RuntimeError(
                                 "pending gap buffer full for "
