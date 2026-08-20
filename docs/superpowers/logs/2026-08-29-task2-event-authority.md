@@ -546,3 +546,22 @@ git diff --check
 ```
 
 代码提交：`0307db0 fix: isolate projection errors by stream`
+
+## ProjectionRuntime 按 stream 检查错误
+
+问题：错误状态改为按 stream 分组后，`ProjectionRuntime._raise_on_dispatch_error()` 仍查询全局 `errors()`；一个 stream 的失败会误使另一个健康 stream 的恢复进入 `FAILED`。
+
+决策：Runtime 恢复阶段改为调用 `errors(stream_id)`，只检查当前正在回放的 stream。其它 stream 的失败继续保留并可独立处理。
+
+TDD：新增“failed stream 不影响 healthy stream recovery”回归测试；旧实现失败，改为按 stream 查询后通过。
+
+验证：
+
+```text
+G:\\Anaconda\\envs\\smallshrimp\\python.exe -m pytest tests/test_storage_ports.py tests/test_events.py tests/test_models.py tests/test_protocol.py tests/test_recovery.py -q
+52 passed
+G:\\Anaconda\\envs\\smallshrimp\\python.exe -m compileall -q src
+git diff --check
+```
+
+代码提交：`efa05c5 fix: scope recovery errors to stream`
