@@ -19,17 +19,27 @@ class ProjectionDispatcher:
         self,
         checkpoint_store: ProjectionCheckpointStore | None = None,
         max_pending_events: int = 10_000,
+        max_pending_events_total: int = 100_000,
     ) -> None:
         if not isinstance(max_pending_events, int) or isinstance(max_pending_events, bool):
             raise TypeError("max_pending_events must be an integer")
         if max_pending_events < 1:
             raise ValueError("max_pending_events must be positive")
+        if not isinstance(max_pending_events_total, int) or isinstance(
+            max_pending_events_total, bool
+        ):
+            raise TypeError("max_pending_events_total must be an integer")
+        if max_pending_events_total < 1:
+            raise ValueError("max_pending_events_total must be positive")
         self._backends: Dict[str, EventProjector] = {}
         self._errors: Dict[str, Dict[str, str]] = {}
         self._errors_lock = Lock()
         self._checkpoint_store = checkpoint_store
         self.max_pending_events = max_pending_events
+        self.max_pending_events_total = max_pending_events_total
         self._pending: Dict[Tuple[str, str], Dict[int, Event]] = {}
+        self._pending_count = 0
+        self._pending_count_lock = Lock()
         self._projection_locks: Dict[Tuple[str, str], RLock] = {}
         self._projection_locks_guard = Lock()
 
@@ -58,16 +68,27 @@ class ProjectionDispatcher:
                             self._clear_error(event.stream_id, name)
                             continue
                         pending = self._pending.setdefault((name, event.stream_id), {})
-                        if (
-                            event.seq not in pending
-                            and len(pending) >= self.max_pending_events
-                            and event.seq != checkpoint + 1
-                        ):
-                            raise RuntimeError(
-                                "pending gap buffer full for "
-                                f"projection={name}, stream_id={event.stream_id}"
-                            )
-                        pending.setdefault(event.seq, event)
+                        if event.seq not in pending:
+                            is_gap_filler = event.seq == checkpoint + 1
+                            with self._pending_count_lock:
+                                if (
+                                    not is_gap_filler
+                                    and len(pending) >= self.max_pending_events
+                                ):
+                                    raise RuntimeError(
+                                        "pending gap buffer full for "
+                                        f"projection={name}, stream_id={event.stream_id}"
+                                    )
+                                if (
+                                    not is_gap_filler
+                                    and self._pending_count >= self.max_pending_events_total
+                                ):
+                                    raise RuntimeError(
+                                        "total pending gap buffer full for "
+                                        f"stream_id={event.stream_id}"
+                                    )
+                                pending[event.seq] = event
+                                self._pending_count += 1
                         next_seq = checkpoint + 1
                         while next_seq in pending:
                             candidate = pending[next_seq]
@@ -82,6 +103,8 @@ class ProjectionDispatcher:
                                 name, event.stream_id, candidate.seq
                             )
                             del pending[next_seq]
+                            with self._pending_count_lock:
+                                self._pending_count -= 1
                             checkpoint = candidate.seq
                             next_seq += 1
                         watermarks[name] = checkpoint
@@ -139,7 +162,10 @@ class ProjectionDispatcher:
         removed = 0
         for name in self._backends:
             with self._projection_lock(name, stream_id):
-                removed += len(self._pending.pop((name, stream_id), {}))
+                removed_for_key = len(self._pending.pop((name, stream_id), {}))
+                removed += removed_for_key
+                with self._pending_count_lock:
+                    self._pending_count -= removed_for_key
         return removed
 
     def health(self) -> Dict[str, bool]:

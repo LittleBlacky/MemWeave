@@ -372,6 +372,39 @@ def test_projection_dispatcher_accepts_gap_filling_events_when_pending_is_full(t
     assert checkpoint_store.get("recording", "session:gap-fill") == 4
 
 
+def test_projection_dispatcher_bounds_pending_events_across_all_streams(tmp_path):
+    database = SQLiteDatabase(str(tmp_path / "gap-global-limit.db"))
+    checkpoint_store = RelationalProjectionCheckpointStore(database)
+    dispatcher = ProjectionDispatcher(
+        checkpoint_store=checkpoint_store,
+        max_pending_events=10,
+        max_pending_events_total=2,
+    )
+    dispatcher.register_backend(RecordingBackend())
+
+    def event(stream_id, seq):
+        return Event(
+            event_id=uuid4(),
+            event_type="code.test_passed",
+            stream_id=stream_id,
+            seq=seq,
+            actor="agent:codex",
+            payload={},
+        )
+
+    dispatcher.project(event("session:one", 3))
+    dispatcher.project(event("session:two", 3))
+    assert dispatcher.project(event("session:three", 3)) == {}
+    assert "total pending gap buffer full" in dispatcher.errors()["session:three"]["recording"]
+    assert dispatcher.clear_pending("session:one") == 1
+    assert dispatcher.project(event("session:three", 3)) == {"recording": 0}
+
+
+def test_projection_dispatcher_rejects_invalid_total_pending_capacity():
+    with pytest.raises(ValueError, match="max_pending_events_total must be positive"):
+        ProjectionDispatcher(max_pending_events_total=0)
+
+
 def test_projection_dispatcher_rejects_invalid_pending_capacity():
     with pytest.raises(ValueError, match="max_pending_events must be positive"):
         ProjectionDispatcher(max_pending_events=0)
