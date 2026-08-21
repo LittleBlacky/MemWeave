@@ -215,7 +215,7 @@ Task 2 的公开存储和投影入口统一校验参数：非字符串标识符�
 
 迁移状态读取只在 `schema_migrations` 表尚不存在时返回空列表；连接中断、权限错误、锁冲突或其它数据库异常必须向调用方传播，不能伪装成“尚未执行迁移”。
 
-Dispatcher 的 per-stream gap 缓存必须有容量上限。达到 `max_pending_events` 后不再接收新的缺口事件，并通过 `errors()` 报告 overflow；调用方应先从 EventStore 重放权威事件，再调用 `clear_pending(stream_id)` 清理旧缓存。该机制限制进程内内存增长，不改变事件日志的事实源语义。
+Dispatcher 的 per-stream gap 缓存必须有容量上限。达到 `max_pending_events` 后不再接收新的非连续缺口事件，但始终允许当前 `checkpoint + 1` 的补缺事件进入，以便缓存能够恢复并排空；overflow 通过 `errors()` 报告。调用方应先从 EventStore 重放权威事件，再调用 `clear_pending(stream_id)` 清理旧缓存。该机制限制进程内存增长，不改变事件日志的事实源语义。
 
 投影错误状态按 `(stream_id, backend)` 隔离并受锁保护；`errors()` 返回按 stream 分组的快照，`errors(stream_id)` 返回单个 stream 的 backend 错误。一次 stream 的成功投影不得清除其它 stream 的错误，成功重试只清除对应 backend/stream 条目。
 

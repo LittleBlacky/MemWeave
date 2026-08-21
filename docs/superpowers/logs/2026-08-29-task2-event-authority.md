@@ -547,6 +547,25 @@ git diff --check
 
 代码提交：`0307db0 fix: isolate projection errors by stream`
 
+## Pending 满载时允许补缺事件
+
+问题：pending 达到容量上限后，当前实现无差别拒绝新事件；当真正缺失的 `checkpoint + 1` 到达时也会被拒绝，导致 gap 无法自行填补，只能清空后全量重放。
+
+决策：容量限制只作用于新的非连续缺口事件。当前期待的 `checkpoint + 1` 始终允许进入 pending 并触发 drain，保证满载缓存仍可恢复；异常情况下缓存最多短暂超过配置值一个补缺事件，随后按序排空。
+
+TDD：新增满载后依次补齐 `seq=1`、`seq=2` 的回归测试；旧实现 RED，放宽补缺事件条件后 GREEN。
+
+验证：
+
+```text
+G:\\Anaconda\\envs\\smallshrimp\\python.exe -m pytest tests/test_storage_ports.py tests/test_events.py tests/test_models.py tests/test_protocol.py tests/test_recovery.py -q
+53 passed
+G:\\Anaconda\\envs\\smallshrimp\\python.exe -m compileall -q src
+git diff --check
+```
+
+代码提交：`cfc15d9 fix: allow gap filling at pending capacity`
+
 ## ProjectionRuntime 按 stream 检查错误
 
 问题：错误状态改为按 stream 分组后，`ProjectionRuntime._raise_on_dispatch_error()` 仍查询全局 `errors()`；一个 stream 的失败会误使另一个健康 stream 的恢复进入 `FAILED`。
