@@ -566,6 +566,25 @@ git diff --check
 
 代码提交：`cfc15d9 fix: allow gap filling at pending capacity`
 
+## 进程级 Pending 总量上限
+
+问题：per-stream `max_pending_events` 只能限制单个 stream；大量异常 stream 同时出现永久 gap 时，所有 pending 字典合计仍可能耗尽进程内存。
+
+决策：新增 `max_pending_events_total`（默认 100,000），用受锁保护的全局计数限制所有 backend/stream 的 pending 条目总量。达到总量上限时拒绝新的非连续缺口事件；当前 `checkpoint + 1` 的补缺事件仍允许进入，以保证恢复路径不会被限流锁死。`clear_pending()` 同步维护总计数。
+
+TDD：新增多 stream 总量上限和清理后重新接收测试，以及非法总量配置测试；旧实现 RED，加入全局计数与限制后 GREEN。
+
+验证：
+
+```text
+G:\\Anaconda\\envs\\smallshrimp\\python.exe -m pytest tests/test_storage_ports.py tests/test_events.py tests/test_models.py tests/test_protocol.py tests/test_recovery.py -q
+55 passed
+G:\\Anaconda\\envs\\smallshrimp\\python.exe -m compileall -q src
+git diff --check
+```
+
+代码提交：`9727c40 fix: cap pending events process-wide`
+
 ## ProjectionRuntime 按 stream 检查错误
 
 问题：错误状态改为按 stream 分组后，`ProjectionRuntime._raise_on_dispatch_error()` 仍查询全局 `errors()`；一个 stream 的失败会误使另一个健康 stream 的恢复进入 `FAILED`。
