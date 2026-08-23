@@ -14,7 +14,13 @@ from .sqlalchemy import SQLAlchemyDatabase
 
 
 class SQLiteDatabase(SQLAlchemyDatabase):
-    def __init__(self, path: str, migration_dir: Optional[str] = None):
+    def __init__(
+        self,
+        path: str,
+        migration_dir: Optional[str] = None,
+        max_migration_retries: int = 8,
+    ):
+        self._validate_retry_count(max_migration_retries)
         self.path = path
         self._shared_memory = path == ":memory:"
         self._access_lock = RLock()
@@ -41,6 +47,7 @@ class SQLiteDatabase(SQLAlchemyDatabase):
             cursor.close()
 
         self.migrations = MigrationRunner(migration_dir)
+        self.max_migration_retries = max_migration_retries
         self.apply_migrations()
 
     @contextmanager

@@ -83,6 +83,21 @@ def test_generic_sqlalchemy_database_can_apply_core_migration(tmp_path):
         "0002_outbox",
         "0003_outbox_consumer_receipts",
     ]
+
+
+def test_generic_sqlalchemy_database_migrations_are_safe_under_concurrent_startup(tmp_path):
+    database = SQLAlchemyDatabase(f"sqlite+pysqlite:///{tmp_path / 'migration-race.db'}")
+    barrier = Barrier(8)
+
+    def apply_migrations(_):
+        barrier.wait(timeout=5)
+        return database.apply_migrations()
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        results = list(executor.map(apply_migrations, range(8)))
+
+    assert sum(result == ["0001_core", "0002_outbox", "0003_outbox_consumer_receipts"] for result in results) == 1
+    assert sum(result == [] for result in results) == 7
     assert database.apply_migrations() == []
     assert database.applied_migrations() == [
         "0001_core",
