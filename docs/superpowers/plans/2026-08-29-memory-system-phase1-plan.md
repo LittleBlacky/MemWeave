@@ -121,7 +121,7 @@ docs/superpowers/logs/
 - Test: `tests/test_storage_ports.py`, `tests/test_events.py`
 
 **Interfaces:**
-- `RelationalDatabase.begin()`, `RelationalDatabase.read()`, and `RelationalDatabase.apply_migrations()`.
+- `RelationalDatabase.begin()`, `RelationalDatabase.read()`, and `RelationalDatabase.apply_migrations()`; adapters retry the complete migration transaction for bounded, retryable startup races.
 - `EventRepository.append(stream_id, event_type, payload, actor, request_id, event_id=None, occurred_at=None, causation_id=None, correlation_id=None, idempotency_key=None) -> Event`; `list_after(stream_id, seq) -> list[Event]`; `last_seq(stream_id) -> int`.
 - `EventProjector.apply(event)`, `ProjectionDispatcher.register_backend(backend)`, `project(event)`, `watermarks(stream_id) -> dict[str, int]`, `replay_from(stream_id) -> int`, `clear_pending(stream_id) -> int`, `errors(stream_id=None)`, and `health() -> dict[str, bool]`; `max_pending_events` bounds each backend/stream gap buffer and `max_pending_events_total` bounds all pending entries in the process. `replay_from` returns the minimum checkpoint across registered projections so restart recovery can begin at the slowest backend without skipping events. `clear_pending` only drops bounded in-memory gap buffers after the caller has replayed from the authoritative event log. `errors()` returns a stream-grouped snapshot and never loses another stream's error during concurrent projection. `StorageCoordinator` is retained as a compatibility alias.
 - `EventReplaySource.list_after(stream_id, seq)`, `last_seq(stream_id)`, and `ProjectionRuntime.recover(stream_id) -> int` / `publish(event)` provide explicit per-stream restart recovery without coupling the dispatcher to a concrete event store.

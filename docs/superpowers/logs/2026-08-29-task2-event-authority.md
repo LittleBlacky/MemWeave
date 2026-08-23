@@ -585,6 +585,25 @@ git diff --check
 
 代码提交：`9727c40 fix: cap pending events process-wide`
 
+## 并发迁移初始化修复
+
+问题：多个 Worker 同时调用 `SQLAlchemyDatabase.apply_migrations()` 时，`checkfirst=True` 的检查与建表不是原子操作；并发初始化会出现 `table schema_migrations already exists`，导致部分实例启动失败。
+
+决策：数据库适配器对整批迁移事务增加有限指数退避重试，覆盖表已存在、数据库锁、死锁和序列化冲突。失败事务整体回滚后重新读取已提交迁移版本，非可重试异常继续传播；SQLite 适配器同步暴露相同的重试配置。
+
+TDD：新增 8 线程并发 `apply_migrations()` 测试；旧实现出现建表竞态异常，增加整批重试后仅一个线程执行全部迁移，其余线程返回空列表。
+
+验证：
+
+```text
+G:\\Anaconda\\envs\\smallshrimp\\python.exe -m pytest tests/test_storage_ports.py tests/test_events.py tests/test_models.py tests/test_protocol.py tests/test_recovery.py -q
+56 passed
+G:\\Anaconda\\envs\\smallshrimp\\python.exe -m compileall -q src
+git diff --check
+```
+
+代码提交：`6b2f921 fix: retry concurrent database migrations`
+
 ## ProjectionRuntime 按 stream 检查错误
 
 问题：错误状态改为按 stream 分组后，`ProjectionRuntime._raise_on_dispatch_error()` 仍查询全局 `errors()`；一个 stream 的失败会误使另一个健康 stream 的恢复进入 `FAILED`。
