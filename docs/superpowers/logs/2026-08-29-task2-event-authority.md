@@ -547,6 +547,25 @@ git diff --check
 
 代码提交：`0307db0 fix: isolate projection errors by stream`
 
+## Projection 错误状态恢复清理
+
+问题：水位或健康检查失败后，后续检查成功不会清除旧错误，`errors()` 会长期返回已经恢复的故障。
+
+决策：`watermarks(stream_id)` 成功时清除对应 stream/backend 错误；`health()` 成功时清除 `__system__`/backend 错误。清理仍使用错误状态锁，不影响其它 scope 或 backend。
+
+TDD：新增水位失败后恢复、健康检查失败后恢复测试；旧实现 RED，增加成功分支清理后 GREEN。
+
+验证：
+
+```text
+G:\\Anaconda\\envs\\smallshrimp\\python.exe -m pytest tests/test_storage_ports.py tests/test_events.py tests/test_models.py tests/test_protocol.py tests/test_recovery.py -q
+58 passed
+G:\\Anaconda\\envs\\smallshrimp\\python.exe -m compileall -q src
+git diff --check
+```
+
+代码提交：`4233491 fix: clear recovered projection errors`
+
 ## Pending 满载时允许补缺事件
 
 问题：pending 达到容量上限后，当前实现无差别拒绝新事件；当真正缺失的 `checkpoint + 1` 到达时也会被拒绝，导致 gap 无法自行填补，只能清空后全量重放。
