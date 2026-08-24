@@ -256,6 +256,30 @@ class BrokenWatermarkBackend(RecordingBackend):
         raise RuntimeError("watermark unavailable")
 
 
+def test_projection_dispatcher_clears_watermark_error_after_recovery():
+    class FlakyWatermarkBackend(RecordingBackend):
+        def __init__(self):
+            super().__init__("flaky-watermark")
+            self.failed = True
+
+        def watermark(self, stream_id: str) -> int:
+            if self.failed:
+                raise RuntimeError("watermark unavailable")
+            return super().watermark(stream_id)
+
+    dispatcher = ProjectionDispatcher()
+    backend = FlakyWatermarkBackend()
+    dispatcher.register_backend(backend)
+
+    assert dispatcher.watermarks("session:flaky") == {}
+    assert dispatcher.errors("session:flaky") == {
+        "flaky-watermark": "watermark unavailable"
+    }
+    backend.failed = False
+    assert dispatcher.watermarks("session:flaky") == {"flaky-watermark": 0}
+    assert dispatcher.errors("session:flaky") == {}
+
+
 def test_projection_dispatcher_watermarks_isolate_backend_failures():
     dispatcher = ProjectionDispatcher()
     dispatcher.register_backend(RecordingBackend())
@@ -273,6 +297,30 @@ class BrokenHealthBackend(RecordingBackend):
 
     def health(self) -> bool:
         raise RuntimeError("health unavailable")
+
+
+def test_projection_dispatcher_clears_health_error_after_recovery():
+    class FlakyHealthBackend(RecordingBackend):
+        def __init__(self):
+            super().__init__("flaky-health")
+            self.failed = True
+
+        def health(self) -> bool:
+            if self.failed:
+                raise RuntimeError("health unavailable")
+            return True
+
+    dispatcher = ProjectionDispatcher()
+    backend = FlakyHealthBackend()
+    dispatcher.register_backend(backend)
+
+    assert dispatcher.health() == {"flaky-health": False}
+    assert dispatcher.errors() == {
+        "__system__": {"flaky-health": "health unavailable"}
+    }
+    backend.failed = False
+    assert dispatcher.health() == {"flaky-health": True}
+    assert dispatcher.errors() == {}
 
 
 def test_projection_dispatcher_health_isolates_backend_failures():

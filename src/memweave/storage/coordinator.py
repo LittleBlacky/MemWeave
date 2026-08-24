@@ -134,6 +134,7 @@ class ProjectionDispatcher:
         for name, backend in self._backends.items():
             try:
                 watermarks[name] = backend.watermark(stream_id)
+                self._clear_error(stream_id, name)
             except Exception as exc:
                 self._record_error(stream_id, name, str(exc))
         return watermarks
@@ -173,6 +174,7 @@ class ProjectionDispatcher:
         for name, backend in self._backends.items():
             try:
                 statuses[name] = bool(backend.health())
+                self._clear_error("__system__", name)
             except Exception as exc:
                 statuses[name] = False
                 self._record_error("__system__", name, str(exc))
