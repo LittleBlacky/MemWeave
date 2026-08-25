@@ -566,6 +566,25 @@ git diff --check
 
 代码提交：`4233491 fix: clear recovered projection errors`
 
+## 事件类型与幂等键输入校验
+
+问题：`EventStore.append()` 未校验 `event_type` 和 `idempotency_key`；`event_type=None` 会暴露数据库 NOT NULL 异常，空事件类型会被写入，非字符串幂等键会依赖数据库隐式类型转换。
+
+决策：追加事务前校验 `event_type` 必须是 `EventType` 或非空字符串；`idempotency_key` 必须是 `None` 或非空字符串。非法类型抛 `TypeError`，空字符串抛 `ValueError`。
+
+TDD：新增四个非法字段测试；旧实现 RED，增加前置校验后 GREEN。
+
+验证：
+
+```text
+G:\\Anaconda\\envs\\smallshrimp\\python.exe -m pytest tests/test_storage_ports.py tests/test_events.py tests/test_models.py tests/test_protocol.py tests/test_recovery.py -q
+59 passed
+G:\\Anaconda\\envs\\smallshrimp\\python.exe -m compileall -q src
+git diff --check
+```
+
+代码提交：`4a85432 fix: validate event type and idempotency key`
+
 ## Pending 满载时允许补缺事件
 
 问题：pending 达到容量上限后，当前实现无差别拒绝新事件；当真正缺失的 `checkpoint + 1` 到达时也会被拒绝，导致 gap 无法自行填补，只能清空后全量重放。
