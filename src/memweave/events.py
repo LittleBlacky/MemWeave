@@ -53,11 +53,23 @@ class EventStore:
             raise TypeError("request_id must be a UUID")
         if not isinstance(payload, dict):
             raise TypeError("payload must be a dictionary")
+        if isinstance(event_type, EventType):
+            event_type_value = event_type.value
+        elif isinstance(event_type, str):
+            if not event_type.strip():
+                raise ValueError("event_type must not be blank")
+            event_type_value = event_type
+        else:
+            raise TypeError("event_type must be a string or EventType")
+        if idempotency_key is not None:
+            if not isinstance(idempotency_key, str):
+                raise TypeError("idempotency_key must be a string")
+            if not idempotency_key.strip():
+                raise ValueError("idempotency_key must not be blank")
 
         event_id = event_id or uuid4()
         occurred_at_was_provided = occurred_at is not None
         occurred_at = occurred_at or utc_now()
-        event_type_value = event_type.value if isinstance(event_type, EventType) else event_type
         payload_json = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=_json_default)
         immutable_values = {
             "stream_id": stream_id,

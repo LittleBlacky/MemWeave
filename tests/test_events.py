@@ -154,3 +154,30 @@ def test_event_store_rejects_invalid_public_arguments(tmp_path):
         store.list_after(None, 0)
     with pytest.raises(ValueError, match="seq must not be negative"):
         store.list_after("session:s1", -1)
+
+
+def test_event_store_rejects_invalid_event_type_and_idempotency_key(tmp_path):
+    store = EventStore(Database(str(tmp_path / "invalid-event-fields.db")))
+
+    with pytest.raises(TypeError, match="event_type must be a string or EventType"):
+        store.append("session:s1", None, {}, "user:u1", request_id=uuid4())
+    with pytest.raises(ValueError, match="event_type must not be blank"):
+        store.append("session:s1", "   ", {}, "user:u1", request_id=uuid4())
+    with pytest.raises(TypeError, match="idempotency_key must be a string"):
+        store.append(
+            "session:s1",
+            EventType.USER_MESSAGE,
+            {},
+            "user:u1",
+            request_id=uuid4(),
+            idempotency_key=123,
+        )
+    with pytest.raises(ValueError, match="idempotency_key must not be blank"):
+        store.append(
+            "session:s1",
+            EventType.USER_MESSAGE,
+            {},
+            "user:u1",
+            request_id=uuid4(),
+            idempotency_key="   ",
+        )
