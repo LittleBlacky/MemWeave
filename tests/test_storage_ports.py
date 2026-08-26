@@ -235,12 +235,14 @@ def test_event_repository_append_declares_explicit_contract():
         "causation_id",
         "correlation_id",
         "idempotency_key",
+        "protocol_version",
     ]
     assert parameters["event_id"].default is None
     assert parameters["occurred_at"].default is None
     assert parameters["causation_id"].default is None
     assert parameters["correlation_id"].default is None
     assert parameters["idempotency_key"].default is None
+    assert parameters["protocol_version"].default == "1.0"
 
 
 def test_in_process_projection_dispatcher_has_explicit_name_with_compatibility_alias():

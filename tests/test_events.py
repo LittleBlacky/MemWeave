@@ -7,6 +7,7 @@ import pytest
 from memweave.events import EventStore
 from memweave.models import EventType
 from memweave.db import Database
+from memweave.protocol import ProtocolVersion
 
 
 def test_append_allocates_strict_stream_sequences(tmp_path):
@@ -138,6 +139,56 @@ def test_append_persists_protocol_and_causality_metadata(tmp_path):
     assert restored.causation_id == causation_id
     assert restored.correlation_id == correlation_id
     assert restored.payload == {"exit_code": 1}
+
+
+def test_append_persists_the_requested_protocol_version(tmp_path):
+    store = EventStore(Database(str(tmp_path / "protocol-version.db")))
+
+    string_version = store.append(
+        "session:s1",
+        EventType.USER_MESSAGE,
+        {"text": "hello"},
+        "user:u1",
+        request_id=uuid4(),
+        protocol_version="2.1",
+    )
+    object_version = store.append(
+        "session:s1",
+        EventType.MODEL_OUTPUT,
+        {"text": "hi"},
+        "agent:a1",
+        request_id=uuid4(),
+        protocol_version=ProtocolVersion(major=3, minor=0),
+    )
+
+    restored = store.list_after("session:s1", 0)
+
+    assert string_version.protocol_version == "2.1"
+    assert object_version.protocol_version == "3.0"
+    assert [event.protocol_version for event in restored] == ["2.1", "3.0"]
+
+
+def test_event_store_rejects_invalid_protocol_version(tmp_path):
+    store = EventStore(Database(str(tmp_path / "invalid-protocol-version.db")))
+
+    with pytest.raises(TypeError, match="protocol_version must be a string or ProtocolVersion"):
+        store.append(
+            "session:s1",
+            EventType.USER_MESSAGE,
+            {},
+            "user:u1",
+            request_id=uuid4(),
+            protocol_version=None,
+        )
+    with pytest.raises(ValueError, match="protocol_version must not be blank"):
+        store.append(
+            "session:s1",
+            EventType.USER_MESSAGE,
+            {},
+            "user:u1",
+            request_id=uuid4(),
+            protocol_version=" ",
+        )
 
 
 def test_event_store_rejects_invalid_public_arguments(tmp_path):

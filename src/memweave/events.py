@@ -12,6 +12,7 @@ from sqlalchemy.exc import IntegrityError, OperationalError
 from .clock import utc_now
 from .db import Database
 from .models import Event, EventType
+from .protocol import ProtocolVersion
 from .storage.schema import events_table, stream_heads_table
 
 
@@ -19,6 +20,16 @@ def _json_default(value: Any) -> str:
     if isinstance(value, (UUID, datetime)):
         return str(value)
     raise TypeError("payload contains a non-serializable value")
+
+
+def _normalize_protocol_version(value: ProtocolVersion | str) -> str:
+    if isinstance(value, ProtocolVersion):
+        return f"{value.major}.{value.minor}"
+    if not isinstance(value, str):
+        raise TypeError("protocol_version must be a string or ProtocolVersion")
+    if not value.strip():
+        raise ValueError("protocol_version must not be blank")
+    return value
 
 
 class EventStore:
@@ -40,6 +51,7 @@ class EventStore:
         causation_id: Optional[UUID] = None,
         correlation_id: Optional[UUID] = None,
         idempotency_key: Optional[str] = None,
+        protocol_version: ProtocolVersion | str = "1.0",
     ) -> Event:
         if not isinstance(stream_id, str):
             raise TypeError("stream_id must be a string")
@@ -61,6 +73,7 @@ class EventStore:
             event_type_value = event_type
         else:
             raise TypeError("event_type must be a string or EventType")
+        protocol_version_value = _normalize_protocol_version(protocol_version)
         if idempotency_key is not None:
             if not isinstance(idempotency_key, str):
                 raise TypeError("idempotency_key must be a string")
@@ -81,7 +94,7 @@ class EventStore:
             "causation_id": str(causation_id) if causation_id else None,
             "correlation_id": str(correlation_id) if correlation_id else None,
             "schema_version": 1,
-            "protocol_version": "1.0",
+            "protocol_version": protocol_version_value,
         }
         if occurred_at_was_provided:
             immutable_values["occurred_at"] = occurred_at.isoformat()
@@ -99,6 +112,7 @@ class EventStore:
                     causation_id=causation_id,
                     correlation_id=correlation_id,
                     idempotency_key=idempotency_key,
+                    protocol_version_value=protocol_version_value,
                     immutable_values=immutable_values,
                 )
             except (IntegrityError, OperationalError) as exc:
@@ -121,6 +135,7 @@ class EventStore:
         causation_id: Optional[UUID],
         correlation_id: Optional[UUID],
         idempotency_key: Optional[str],
+        protocol_version_value: str,
         immutable_values: Mapping[str, Any],
     ) -> Event:
         with self.database.begin() as connection:
@@ -171,7 +186,7 @@ class EventStore:
                     actor=actor,
                     payload_json=payload_json,
                     schema_version=1,
-                    protocol_version="1.0",
+                    protocol_version=protocol_version_value,
                     request_id=str(request_id),
                     idempotency_key=idempotency_key,
                     occurred_at=occurred_at.isoformat(),

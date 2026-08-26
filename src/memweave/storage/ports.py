@@ -5,6 +5,7 @@ from typing import Any, ContextManager, Dict, Protocol, runtime_checkable
 from uuid import UUID
 
 from ..models import Event, EventType, MemoryRecord
+from ..protocol import ProtocolVersion
 
 
 class RelationalDatabase(Protocol):
@@ -31,6 +32,7 @@ class EventRepository(Protocol):
         causation_id: UUID | None = None,
         correlation_id: UUID | None = None,
         idempotency_key: str | None = None,
+        protocol_version: ProtocolVersion | str = "1.0",
     ) -> Event:
         ...
 
