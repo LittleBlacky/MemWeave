@@ -40,6 +40,23 @@ git diff --check
 - `:memory:` SQLite 多连接场景尚未作为第一阶段目标；当前测试和推荐用法使用文件数据库。
 - 事件 payload 的业务 Schema 校验和事件处理器注册将在后续任务实现。
 
+## 请求协议版本持久化
+
+问题：`EventStore.append()` 没有 `protocol_version` 参数，事件的幂等比较和数据库插入始终使用 `"1.0"`。上游请求使用其它协议版本时，事件会丢失真实版本，破坏协议协商、审计和迁移判断。
+
+决策：追加接口新增可选的 `protocol_version` 参数，默认保持 `"1.0"` 兼容旧调用。参数接受协议版本字符串或 `ProtocolVersion` 对象；对象规范化为 `"major.minor"` 字符串。规范化值同时用于不可变事件比较、数据库写入和读取恢复，因此重复事件不能以不同协议版本静默复用。
+
+TDD：新增自定义字符串版本、结构化 `ProtocolVersion` 版本的持久化测试，以及空值和空白值校验测试；先确认旧接口因未知参数失败，再实现参数透传和规范化后通过。
+
+验证：
+
+```text
+G:\\Anaconda\\envs\\smallshrimp\\python.exe -m pytest tests/test_storage_ports.py tests/test_events.py tests/test_models.py tests/test_protocol.py tests/test_recovery.py -q
+61 passed
+G:\\Anaconda\\envs\\smallshrimp\\python.exe -m compileall -q src
+git diff --check
+```
+
 ## 存储扩展架构修订
 
 根据多数据库协同需求，Task 2 后续修订为“Storage Ports, Migrations, and Event Authority”：

@@ -123,6 +123,8 @@ needs_confirmation
 }
 ```
 
+事件追加接口必须接收请求携带的 `protocol_version`，不能在存储层固定写入某个版本。持久化时将结构化的 `ProtocolVersion(major, minor)` 规范化为 `"major.minor"` 字符串；重复 `event_id` 或幂等键重放时，协议版本也属于不可变内容的一部分，版本不一致必须报告冲突。
+
 同一 `stream_id` 内 `seq` 严格递增，`event_id` 全局唯一，事件追加后不可修改。
 
 ### 4.2 投影和存储平面
