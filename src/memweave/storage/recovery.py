@@ -57,10 +57,11 @@ class ProjectionRuntime:
             target_seq = self.event_source.last_seq(stream_id)
             start_seq = self.dispatcher.replay_from(stream_id)
             replay = self.event_source.list_after(stream_id, start_seq)
+            replayed_sequences = set()
             for event in sorted(replay, key=lambda item: item.seq):
-                if event.seq <= target_seq:
-                    self.dispatcher.project(event)
-                    self._raise_on_dispatch_error(stream_id)
+                self.dispatcher.project(event)
+                self._raise_on_dispatch_error(stream_id)
+                replayed_sequences.add(event.seq)
 
             with lock:
                 buffered = sorted(
@@ -69,6 +70,8 @@ class ProjectionRuntime:
                 )
                 self._buffers[stream_id] = {}
                 for event in buffered:
+                    if event.seq in replayed_sequences:
+                        continue
                     self.dispatcher.project(event)
                     self._raise_on_dispatch_error(stream_id)
                 self._states[stream_id] = ProjectionRuntimeState.READY

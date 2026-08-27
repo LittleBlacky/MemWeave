@@ -99,6 +99,38 @@ def test_projection_runtime_starts_replay_after_slowest_projection_checkpoint(tm
     assert source.start_seq == 3
 
 
+def test_projection_runtime_does_not_drop_events_seen_after_recovery_target():
+    replayed = [
+        Event(
+            event_id=uuid4(),
+            event_type="code.test_passed",
+            stream_id="session:late-replay",
+            seq=seq,
+            actor="agent:codex",
+            payload={"seq": seq},
+        )
+        for seq in (1, 2, 3)
+    ]
+
+    class SourceWithLateEvent:
+        def last_seq(self, stream_id):
+            return 2
+
+        def list_after(self, stream_id, seq):
+            return replayed
+
+    backend = RecordingBackend()
+    dispatcher = ProjectionDispatcher()
+    dispatcher.register_backend(backend)
+    from memweave.storage.recovery import ProjectionRuntime
+
+    runtime = ProjectionRuntime(dispatcher, SourceWithLateEvent())
+
+    runtime.recover("session:late-replay")
+
+    assert backend.events == [event.event_id for event in replayed]
+
+
 def test_projection_runtime_buffers_live_events_until_recovery_finishes(tmp_path):
     database = SQLiteDatabase(str(tmp_path / "recovery-buffer.db"))
     event_store = EventStore(database)

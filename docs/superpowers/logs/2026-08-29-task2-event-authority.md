@@ -677,3 +677,25 @@ git diff --check
 ```
 
 代码提交：`efa05c5 fix: scope recovery errors to stream`
+
+## ProjectionRuntime 回放边界竞态修复
+
+问题：`ProjectionRuntime.recover()` 先读取恢复开始时的 `target_seq`，随后执行
+`list_after()`；如果事件在两次读取之间提交并被回放查询返回，其序号大于
+`target_seq`，旧实现会跳过该事件并直接进入 `READY`，造成永久漏投影。
+
+决策：回放查询返回的事件均视为已提交事件并按序处理，不再用过期的
+`target_seq` 过滤。记录已回放序号，排空恢复期间的实时缓冲时跳过同一序号，
+避免无 checkpoint 的 best-effort 模式重复调用投影器。
+
+TDD：新增“回放结果包含恢复目标之后事件”的回归测试；旧实现 RED，移除过期
+水位过滤并增加缓冲去重后 GREEN。
+
+验证：
+
+```text
+G:\\Anaconda\\envs\\smallshrimp\\python.exe -m pytest tests/test_recovery.py -q
+6 passed
+G:\\Anaconda\\envs\\smallshrimp\\python.exe -m compileall -q src
+git diff --check
+```
