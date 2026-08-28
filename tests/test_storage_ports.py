@@ -381,6 +381,41 @@ def test_projection_dispatcher_rejects_invalid_backend_and_event_arguments():
         dispatcher.project(None)
 
 
+def test_projection_dispatcher_distinguishes_invalid_stream_id_types(tmp_path):
+    database = SQLiteDatabase(str(tmp_path / "dispatcher-invalid-stream.db"))
+    checkpoint_store = RelationalProjectionCheckpointStore(database)
+    dispatcher = ProjectionDispatcher(checkpoint_store=checkpoint_store)
+    dispatcher.register_backend(RecordingBackend())
+
+    for method in (dispatcher.watermarks, dispatcher.replay_from, dispatcher.clear_pending):
+        with pytest.raises(TypeError, match="stream_id must be a string"):
+            method(None)
+    with pytest.raises(TypeError, match="stream_id must be a string"):
+        dispatcher.errors(123)
+
+
+def test_projection_dispatcher_reclaims_completed_stream_state(tmp_path):
+    import gc
+
+    database = SQLiteDatabase(str(tmp_path / "dispatcher-state-cleanup.db"))
+    checkpoint_store = RelationalProjectionCheckpointStore(database)
+    dispatcher = ProjectionDispatcher(checkpoint_store=checkpoint_store)
+    dispatcher.register_backend(RecordingBackend())
+
+    event = Event(
+        event_id=uuid4(),
+        event_type="code.test_passed",
+        stream_id="session:one-shot",
+        seq=1,
+        actor="agent:codex",
+        payload={},
+    )
+    assert dispatcher.project(event) == {"recording": 1}
+    assert dispatcher._pending == {}
+    gc.collect()
+    assert len(dispatcher._projection_locks) == 0
+
+
 def test_projection_dispatcher_bounds_gap_pending_cache_and_supports_explicit_clear(tmp_path):
     database = SQLiteDatabase(str(tmp_path / "gap-limit.db"))
     checkpoint_store = RelationalProjectionCheckpointStore(database)

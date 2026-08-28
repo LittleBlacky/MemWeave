@@ -7,6 +7,7 @@ this module still only performs best-effort in-process fan-out.
 
 from threading import Lock, RLock
 from typing import Dict, Tuple
+from weakref import WeakValueDictionary
 
 from ..models import Event
 from .ports import EventProjector, ProjectionCheckpointStore
@@ -40,7 +41,11 @@ class ProjectionDispatcher:
         self._pending: Dict[Tuple[str, str], Dict[int, Event]] = {}
         self._pending_count = 0
         self._pending_count_lock = Lock()
-        self._projection_locks: Dict[Tuple[str, str], RLock] = {}
+        # Locks are only needed while a stream/backend is active. Weak values
+        # prevent one-off stream IDs from retaining lock objects forever.
+        self._projection_locks: WeakValueDictionary[Tuple[str, str], RLock] = (
+            WeakValueDictionary()
+        )
         self._projection_locks_guard = Lock()
 
     def register_backend(self, backend: EventProjector) -> None:
@@ -64,6 +69,8 @@ class ProjectionDispatcher:
                     if self._checkpoint_store is not None:
                         checkpoint = self._checkpoint_store.get(name, event.stream_id)
                         if event.seq <= checkpoint:
+                            if not self._pending.get((name, event.stream_id)):
+                                self._pending.pop((name, event.stream_id), None)
                             watermarks[name] = checkpoint
                             self._clear_error(event.stream_id, name)
                             continue
@@ -107,6 +114,8 @@ class ProjectionDispatcher:
                                 self._pending_count -= 1
                             checkpoint = candidate.seq
                             next_seq += 1
+                        if not pending:
+                            self._pending.pop((name, event.stream_id), None)
                         watermarks[name] = checkpoint
                         if checkpoint >= event.seq:
                             self._clear_error(event.stream_id, name)
@@ -128,8 +137,7 @@ class ProjectionDispatcher:
             return lock
 
     def watermarks(self, stream_id: str) -> Dict[str, int]:
-        if not isinstance(stream_id, str) or not stream_id.strip():
-            raise ValueError("stream_id must not be blank")
+        self._validate_stream_id(stream_id)
         watermarks: Dict[str, int] = {}
         for name, backend in self._backends.items():
             try:
@@ -146,8 +154,7 @@ class ProjectionDispatcher:
         projection therefore determines the replay boundary; using the
         maximum checkpoint could permanently skip events for lagging backends.
         """
-        if not isinstance(stream_id, str) or not stream_id.strip():
-            raise ValueError("stream_id must not be blank")
+        self._validate_stream_id(stream_id)
         if self._checkpoint_store is None or not self._backends:
             return 0
         checkpoints = [
@@ -158,8 +165,7 @@ class ProjectionDispatcher:
 
     def clear_pending(self, stream_id: str) -> int:
         """Drop buffered gap events after the caller has replayed the source log."""
-        if not isinstance(stream_id, str) or not stream_id.strip():
-            raise ValueError("stream_id must not be blank")
+        self._validate_stream_id(stream_id)
         removed = 0
         for name in self._backends:
             with self._projection_lock(name, stream_id):
@@ -183,8 +189,7 @@ class ProjectionDispatcher:
     def errors(self, stream_id: str | None = None):
         """Return a snapshot of projection errors, optionally for one stream."""
         if stream_id is not None:
-            if not isinstance(stream_id, str) or not stream_id.strip():
-                raise ValueError("stream_id must not be blank")
+            self._validate_stream_id(stream_id)
         with self._errors_lock:
             if stream_id is not None:
                 return dict(self._errors.get(stream_id, {}))
@@ -205,6 +210,13 @@ class ProjectionDispatcher:
             errors.pop(name, None)
             if not errors:
                 self._errors.pop(scope, None)
+
+    @staticmethod
+    def _validate_stream_id(stream_id: str) -> None:
+        if not isinstance(stream_id, str):
+            raise TypeError("stream_id must be a string")
+        if not stream_id.strip():
+            raise ValueError("stream_id must not be blank")
 
 
 # Compatibility name retained for callers written against the Task 2 API.

@@ -699,3 +699,23 @@ G:\\Anaconda\\envs\\smallshrimp\\python.exe -m pytest tests/test_recovery.py -q
 G:\\Anaconda\\envs\\smallshrimp\\python.exe -m compileall -q src
 git diff --check
 ```
+
+## Dispatcher 输入语义和状态回收修复
+
+问题：ProjectionDispatcher 的 stream 标识符校验将类型错误误报为
+`ValueError`；大量一次性 stream 还会永久保留空 pending 状态和锁对象。
+
+决策：统一非字符串 stream ID 使用 `TypeError`、空字符串使用 `ValueError`；
+成功排空后删除空 pending 条目，并使用弱引用保存 per-stream 锁，避免进程内
+状态随 stream 数量无界增长。
+
+TDD：新增非法 stream ID 类型和已完成 stream 状态回收测试。
+
+验证：
+
+```text
+uv run pytest -q tests/test_events.py tests/test_storage_ports.py tests/test_recovery.py
+52 passed
+uv run python -m compileall -q src
+git diff --check
+```
