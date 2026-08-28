@@ -700,6 +700,27 @@ G:\\Anaconda\\envs\\smallshrimp\\python.exe -m compileall -q src
 git diff --check
 ```
 
+## EventStore event_id 输入校验
+
+问题：`EventStore.append()` 的 `event_id` 契约声明为 `UUID`，但实现未在公共入口
+校验。合法 UUID 字符串会被意外接受，非法值则在事务内部的行转换阶段失败，
+导致调用方无法依赖稳定的参数错误类型。
+
+决策：在追加事务开始前要求显式传入的 `event_id` 必须是 `UUID`；未传入时仍由
+存储层生成 UUID。非法类型统一抛出 `TypeError`，避免进入数据库事务。
+
+TDD：新增非 UUID `event_id` 回归测试；旧实现错误地接受 UUID 字符串，增加前置
+校验后通过，并确认流水位保持为零。
+
+验证：
+
+```text
+G:\\Anaconda\\envs\\smallshrimp\\python.exe -m pytest tests/test_event_id_validation.py tests/test_events.py -q
+10 passed
+G:\\Anaconda\\envs\\smallshrimp\\python.exe -m compileall -q src
+git diff --check
+```
+
 ## Dispatcher 输入语义和状态回收修复
 
 问题：ProjectionDispatcher 的 stream 标识符校验将类型错误误报为

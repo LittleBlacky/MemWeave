@@ -63,6 +63,8 @@ class EventStore:
             raise ValueError("actor must not be blank")
         if not isinstance(request_id, UUID):
             raise TypeError("request_id must be a UUID")
+        if event_id is not None and not isinstance(event_id, UUID):
+            raise TypeError("event_id must be a UUID")
         if not isinstance(payload, dict):
             raise TypeError("payload must be a dictionary")
         if isinstance(event_type, EventType):
