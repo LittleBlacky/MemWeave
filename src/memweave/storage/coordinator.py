@@ -69,7 +69,16 @@ class ProjectionDispatcher:
                     if self._checkpoint_store is not None:
                         checkpoint = self._checkpoint_store.get(name, event.stream_id)
                         if event.seq <= checkpoint:
-                            if not self._pending.get((name, event.stream_id)):
+                            pending = self._pending.get((name, event.stream_id))
+                            if pending:
+                                obsolete = [
+                                    seq for seq in pending if seq <= checkpoint
+                                ]
+                                with self._pending_count_lock:
+                                    for seq in obsolete:
+                                        pending.pop(seq, None)
+                                    self._pending_count -= len(obsolete)
+                            if not pending:
                                 self._pending.pop((name, event.stream_id), None)
                             watermarks[name] = checkpoint
                             self._clear_error(event.stream_id, name)

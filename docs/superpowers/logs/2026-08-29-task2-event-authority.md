@@ -745,6 +745,29 @@ G:\\Anaconda\\envs\\smallshrimp\\python.exe -m compileall -q src
 git diff --check
 ```
 
+## Dispatcher 外部 checkpoint 后清理旧 pending
+
+问题：多个 Dispatcher 共享 checkpoint 时，一个实例可能缓存了缺口事件，另一
+个实例却已经把同一 stream 的 checkpoint 推进到更高序号。旧 Dispatcher 读取到
+新水位后会跳过事件，但原实现不会删除 pending 中已被覆盖的序号，导致无效缓存
+持续占用 per-stream 和进程级容量。
+
+决策：当收到的事件序号不大于当前 checkpoint 时，删除该 backend/stream 中所有
+`seq <= checkpoint` 的 pending 项，并在同一受保护计数下减少 `_pending_count`；
+仍高于 checkpoint 的事件保留，等待后续补齐。
+
+TDD：新增共享 checkpoint 推进后的 pending 清理回归测试；旧实现保留缓存，增加
+按水位裁剪后通过，并确认总计数归零。
+
+验证：
+
+```text
+G:\\Anaconda\\envs\\smallshrimp\\python.exe -m pytest tests/test_storage_ports.py -q
+38 passed
+G:\\Anaconda\\envs\\smallshrimp\\python.exe -m compileall -q src
+git diff --check
+```
+
 ## Dispatcher 输入语义和状态回收修复
 
 问题：ProjectionDispatcher 的 stream 标识符校验将类型错误误报为

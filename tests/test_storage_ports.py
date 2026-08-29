@@ -612,6 +612,33 @@ def test_projection_checkpoint_does_not_skip_gaps_in_out_of_order_events(tmp_pat
     assert backend.events == [first.event_id, second.event_id, third.event_id]
 
 
+def test_projection_dispatcher_clears_pending_events_covered_by_external_checkpoint(tmp_path):
+    database = SQLiteDatabase(str(tmp_path / "pending-checkpoint-cleanup.db"))
+    checkpoint_store = RelationalProjectionCheckpointStore(database)
+    dispatcher = ProjectionDispatcher(checkpoint_store=checkpoint_store)
+    backend = RecordingBackend()
+    dispatcher.register_backend(backend)
+
+    def event(seq):
+        return Event(
+            event_id=uuid4(),
+            event_type="code.test_passed",
+            stream_id="session:cleanup",
+            seq=seq,
+            actor="agent:codex",
+            payload={"seq": seq},
+        )
+
+    assert dispatcher.project(event(3)) == {"recording": 0}
+    assert dispatcher._pending_count == 1
+
+    checkpoint_store.save_max("recording", "session:cleanup", 3)
+
+    assert dispatcher.project(event(1)) == {"recording": 3}
+    assert dispatcher._pending == {}
+    assert dispatcher._pending_count == 0
+
+
 def test_projection_checkpoint_save_max_handles_concurrent_initial_insert(tmp_path):
     database = SQLAlchemyDatabase(f"sqlite+pysqlite:///{tmp_path / 'checkpoint-race.db'}")
     database.apply_migrations()
