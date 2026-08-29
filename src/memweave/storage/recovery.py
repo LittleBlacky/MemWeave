@@ -29,11 +29,19 @@ class ProjectionRuntime:
         self,
         dispatcher: ProjectionDispatcher,
         event_source: EventReplaySource,
+        max_buffer_events: int = 10_000,
+        max_buffer_events_total: int = 100_000,
     ) -> None:
+        self._validate_capacity(max_buffer_events, "max_buffer_events")
+        self._validate_capacity(max_buffer_events_total, "max_buffer_events_total")
         self.dispatcher = dispatcher
         self.event_source = event_source
+        self.max_buffer_events = max_buffer_events
+        self.max_buffer_events_total = max_buffer_events_total
         self._states: Dict[str, ProjectionRuntimeState] = {}
         self._buffers: Dict[str, Dict[int, Event]] = {}
+        self._buffer_count = 0
+        self._buffer_count_lock = Lock()
         self._locks: Dict[str, RLock] = {}
         self._locks_guard = Lock()
         self._active_recoveries: set[str] = set()
@@ -64,11 +72,12 @@ class ProjectionRuntime:
                 replayed_sequences.add(event.seq)
 
             with lock:
-                buffered = sorted(
-                    self._buffers.get(stream_id, {}).values(),
-                    key=lambda item: item.seq,
-                )
+                buffer = self._buffers.get(stream_id, {})
+                buffered = sorted(buffer.values(), key=lambda item: item.seq)
+                removed = len(buffer)
                 self._buffers[stream_id] = {}
+                with self._buffer_count_lock:
+                    self._buffer_count -= removed
                 for event in buffered:
                     if event.seq in replayed_sequences:
                         continue
@@ -94,9 +103,43 @@ class ProjectionRuntime:
             if state is ProjectionRuntimeState.FAILED:
                 raise RuntimeError(f"recovery failed for {stream_id}")
             if state is ProjectionRuntimeState.RECOVERING:
-                self._buffers.setdefault(stream_id, {}).setdefault(event.seq, event)
+                buffer = self._buffers.setdefault(stream_id, {})
+                if event.seq not in buffer:
+                    with self._buffer_count_lock:
+                        if len(buffer) >= self.max_buffer_events:
+                            raise RuntimeError(
+                                "recovery buffer full for "
+                                f"stream_id={stream_id}"
+                            )
+                        if self._buffer_count >= self.max_buffer_events_total:
+                            raise RuntimeError(
+                                "total recovery buffer full for "
+                                f"stream_id={stream_id}"
+                            )
+                        buffer[event.seq] = event
+                        self._buffer_count += 1
                 return {}
             return self.dispatcher.project(event)
+
+    def clear_buffer(self, stream_id: str) -> int:
+        """Drop buffered live events after replaying the authoritative source."""
+        self._validate_stream_id(stream_id)
+        with self._stream_lock(stream_id):
+            buffer = self._buffers.get(stream_id)
+            if not buffer:
+                return 0
+            removed = len(buffer)
+            buffer.clear()
+            with self._buffer_count_lock:
+                self._buffer_count -= removed
+            return removed
+
+    @staticmethod
+    def _validate_capacity(value: int, name: str) -> None:
+        if not isinstance(value, int) or isinstance(value, bool):
+            raise TypeError(f"{name} must be an integer")
+        if value < 1:
+            raise ValueError(f"{name} must be positive")
 
     def _raise_on_dispatch_error(self, stream_id: str) -> None:
         errors = self.dispatcher.errors(stream_id)

@@ -721,6 +721,30 @@ G:\\Anaconda\\envs\\smallshrimp\\python.exe -m compileall -q src
 git diff --check
 ```
 
+## ProjectionRuntime 恢复缓冲上限
+
+问题：Runtime 在 `RECOVERING` 状态接收实时事件时，per-stream 缓冲区没有容量
+限制。事件源长时间不可用或恢复失败时，缓冲会持续增长；失败状态也没有清理
+入口，可能造成进程内存无限占用。
+
+决策：为 Runtime 增加 `max_buffer_events` 和
+`max_buffer_events_total` 两级上限，默认值分别为 10,000 和 100,000。重复序号
+不重复占用配额；超限时立即拒绝新事件并抛出明确错误。恢复排空和新增的
+`clear_buffer(stream_id)` 会同步维护总计数，调用方可在从权威事件源重放后释放
+旧缓冲。
+
+TDD：新增跨 stream 缓冲上限、超限拒绝和清理后重新接收的回归测试；旧实现不
+接受容量参数，增加有界缓冲与清理逻辑后通过。
+
+验证：
+
+```text
+G:\\Anaconda\\envs\\smallshrimp\\python.exe -m pytest tests/test_recovery.py -q
+7 passed
+G:\\Anaconda\\envs\\smallshrimp\\python.exe -m compileall -q src
+git diff --check
+```
+
 ## Dispatcher 输入语义和状态回收修复
 
 问题：ProjectionDispatcher 的 stream 标识符校验将类型错误误报为

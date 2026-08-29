@@ -131,6 +131,39 @@ def test_projection_runtime_does_not_drop_events_seen_after_recovery_target():
     assert backend.events == [event.event_id for event in replayed]
 
 
+def test_projection_runtime_bounds_recovery_buffers_and_supports_clear():
+    from memweave.storage.recovery import ProjectionRuntime
+
+    def event(stream_id, seq):
+        return Event(
+            event_id=uuid4(),
+            event_type="code.test_passed",
+            stream_id=stream_id,
+            seq=seq,
+            actor="agent:codex",
+            payload={"seq": seq},
+        )
+
+    runtime = ProjectionRuntime(
+        ProjectionDispatcher(),
+        object(),
+        max_buffer_events=2,
+        max_buffer_events_total=3,
+    )
+
+    runtime.publish(event("session:one", 1))
+    runtime.publish(event("session:one", 2))
+    with pytest.raises(RuntimeError, match="recovery buffer full"):
+        runtime.publish(event("session:one", 3))
+
+    runtime.publish(event("session:two", 1))
+    with pytest.raises(RuntimeError, match="total recovery buffer full"):
+        runtime.publish(event("session:two", 2))
+
+    assert runtime.clear_buffer("session:one") == 2
+    runtime.publish(event("session:two", 2))
+
+
 def test_projection_runtime_buffers_live_events_until_recovery_finishes(tmp_path):
     database = SQLiteDatabase(str(tmp_path / "recovery-buffer.db"))
     event_store = EventStore(database)
