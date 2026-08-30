@@ -135,6 +135,10 @@ class SessionStore:
         session_id = operation.scope_id
         with self.database.begin() as connection:
             state = self._read(connection, session_id)
+            if source_seq > state.last_seq:
+                raise ValueError(
+                    "source_seq must not exceed the session watermark; apply the source event first"
+                )
             if self._apply_operation_to_state(
                 state,
                 operation,

@@ -87,3 +87,17 @@ TDD 验证：新增 `tests/test_session_coordinator.py`，覆盖 EventStore 失�
 
 当前边界：本实现选择事件先落库和可恢复投影，不引入跨数据库分布式事务；Outbox、
 长期权威记忆和自然语言提取仍由后续 Task 负责。
+
+## source_seq 与 session watermark 约束
+
+日期：2026-08-31
+
+- 明确 `SessionState.last_seq` 是事件投影水位，`MemoryRecord.source_seq` 是记忆来源
+  事件序号，两者不是同一个版本字段；
+- 低层 `SessionStore.apply_operation()` 现在要求 source event 已先投影，拒绝
+  `source_seq > last_seq` 的绕过式写入；
+- `memory.command` 由 `apply_event()` 在推进 watermark 的同一事务内应用，因而不受
+  该低层入口限制；
+- 新增测试验证未投影源事件不能直接创建 session memory，正常事件先投影后操作仍可用。
+
+TDD 验证：Task 3 相关测试 15 passed。
