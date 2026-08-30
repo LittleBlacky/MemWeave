@@ -921,6 +921,28 @@ G:\\Anaconda\\envs\\smallshrimp\\python.exe -m compileall -q src
 git diff --check
 ```
 
+## Task 2 收尾
+
+Task 2 已完成。最终范围包括：SQLAlchemy 存储端口和版本化迁移、SQLite 适配器、
+不可变 EventStore、流内严格序号和幂等、并发写入安全、ProjectionDispatcher、
+按 stream 的 checkpoint/watermark、乱序 gap 缓存与容量控制、投影错误隔离、
+ProjectionRuntime 恢复和失败重试边界，以及跨数据库迁移异常兼容。
+
+Task 2 明确不包含：Session Projection、Durable Memory Store、Recall、Agent
+Middleware、工具/HTTP Adapter，以及 Outbox Worker 的业务 handler 编排；这些由
+后续 Task 3–8 实现。
+
+最终验证（排除用户未提交的 Task 3 测试文件）：
+
+```text
+G:\\Anaconda\\envs\\smallshrimp\\python.exe -m pytest tests/test_storage_ports.py tests/test_events.py tests/test_recovery.py -q
+63 passed
+G:\\Anaconda\\envs\\smallshrimp\\python.exe -m compileall -q src
+git diff --check
+```
+
+收尾提交：`601e54e fix: retain pending events after recovery failure`
+
 ## ProjectionRuntime 回放水位完整性
 
 问题：`recover()` 读取的 `last_seq()` 可能高于 `list_after()` 实际返回的事件
