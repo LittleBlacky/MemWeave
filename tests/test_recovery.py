@@ -76,13 +76,24 @@ def test_projection_runtime_starts_replay_after_slowest_projection_checkpoint(tm
     class RecordingSource:
         def __init__(self):
             self.start_seq = None
+            self.events = [
+                Event(
+                    event_id=uuid4(),
+                    event_type="code.test_passed",
+                    stream_id="session:start",
+                    seq=seq,
+                    actor="agent:codex",
+                    payload={"seq": seq},
+                )
+                for seq in (4, 5)
+            ]
 
         def last_seq(self, stream_id):
             return 5
 
         def list_after(self, stream_id, seq):
             self.start_seq = seq
-            return []
+            return self.events
 
     class NamedBackend(RecordingBackend):
         def __init__(self, name):
@@ -207,6 +218,24 @@ def test_projection_runtime_rejects_replay_events_from_another_stream():
 
     assert backend.events == []
     assert runtime.state("session:expected") is ProjectionRuntimeState.FAILED
+
+
+def test_projection_runtime_rejects_replay_source_that_lags_target():
+    from memweave.storage.recovery import ProjectionRuntime, ProjectionRuntimeState
+
+    class LaggingSource:
+        def last_seq(self, stream_id):
+            return 3
+
+        def list_after(self, stream_id, seq):
+            return []
+
+    runtime = ProjectionRuntime(ProjectionDispatcher(), LaggingSource())
+
+    with pytest.raises(RuntimeError, match="replay did not cover target sequence"):
+        runtime.recover("session:lagging")
+
+    assert runtime.state("session:lagging") is ProjectionRuntimeState.FAILED
 
 
 def test_projection_runtime_buffers_live_events_until_recovery_finishes(tmp_path):

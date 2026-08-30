@@ -833,6 +833,28 @@ G:\\Anaconda\\envs\\smallshrimp\\python.exe -m compileall -q src
 git diff --check
 ```
 
+## ProjectionRuntime 回放水位完整性
+
+问题：`recover()` 读取的 `last_seq()` 可能高于 `list_after()` 实际返回的事件
+范围，例如回放源使用滞后副本或查询不完整。旧实现未验证目标水位是否已覆盖，
+会在没有投影全部事件时直接切换 `READY`，后续实时事件无法补回缺失历史。
+
+决策：恢复排空实时缓冲后，检查从 `start_seq + 1` 到 `target_seq` 的序号是否
+连续出现在回放/缓冲结果中。覆盖不完整时抛出恢复错误并进入 `FAILED`；只有
+追平目标水位才允许进入 `READY`。同时更新回放起点测试桩，使其返回契约要求的
+事件范围。
+
+TDD：新增滞后回放源回归测试；旧实现错误进入 READY，增加连续水位检查后通过。
+
+验证：
+
+```text
+G:\\Anaconda\\envs\\smallshrimp\\python.exe -m pytest tests/test_recovery.py -q
+10 passed
+G:\\Anaconda\\envs\\smallshrimp\\python.exe -m compileall -q src
+git diff --check
+```
+
 ## Dispatcher 输入语义和状态回收修复
 
 问题：ProjectionDispatcher 的 stream 标识符校验将类型错误误报为

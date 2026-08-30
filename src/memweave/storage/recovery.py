@@ -80,11 +80,19 @@ class ProjectionRuntime:
                 with self._buffer_count_lock:
                     self._buffer_count -= removed
                 for event in buffered:
+                    self._validate_event_stream(event, stream_id)
                     if event.seq in replayed_sequences:
                         continue
-                    self._validate_event_stream(event, stream_id)
                     self.dispatcher.project(event)
                     self._raise_on_dispatch_error(stream_id)
+                    replayed_sequences.add(event.seq)
+                if not self._covers_target_sequence(
+                    start_seq, target_seq, replayed_sequences
+                ):
+                    raise RuntimeError(
+                        "replay did not cover target sequence "
+                        f"for stream_id={stream_id}"
+                    )
                 self._states[stream_id] = ProjectionRuntimeState.READY
             return target_seq
         except Exception:
@@ -149,6 +157,23 @@ class ProjectionRuntime:
             raise ValueError(
                 "replay event stream_id does not match requested stream_id"
             )
+
+    @staticmethod
+    def _covers_target_sequence(
+        start_seq: int, target_seq: int, observed_sequences: set[int]
+    ) -> bool:
+        if target_seq <= start_seq:
+            return True
+        expected = start_seq + 1
+        for seq in sorted(observed_sequences):
+            if seq < expected:
+                continue
+            if seq != expected:
+                return False
+            expected += 1
+            if expected > target_seq:
+                return True
+        return False
 
     def _raise_on_dispatch_error(self, stream_id: str) -> None:
         errors = self.dispatcher.errors(stream_id)
