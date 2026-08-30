@@ -65,12 +65,22 @@ class ProjectionRuntime:
             target_seq = self.event_source.last_seq(stream_id)
             start_seq = self.dispatcher.replay_from(stream_id)
             replay = self.event_source.list_after(stream_id, start_seq)
-            replayed_sequences = set()
-            for event in sorted(replay, key=lambda item: item.seq):
+            replayed_events: Dict[int, Event] = {}
+            ordered_replay = sorted(replay, key=lambda item: item.seq)
+            for event in ordered_replay:
                 self._validate_event_stream(event, stream_id)
+                existing = replayed_events.get(event.seq)
+                if existing is not None:
+                    if existing != event:
+                        raise ValueError(
+                            "conflicting events for "
+                            f"stream_id={stream_id}, seq={event.seq}"
+                        )
+                    continue
+                replayed_events[event.seq] = event
+            for event in sorted(replayed_events.values(), key=lambda item: item.seq):
                 self.dispatcher.project(event)
                 self._raise_on_dispatch_error(stream_id)
-                replayed_sequences.add(event.seq)
 
             with lock:
                 buffer = self._buffers.get(stream_id, {})
@@ -81,13 +91,19 @@ class ProjectionRuntime:
                     self._buffer_count -= removed
                 for event in buffered:
                     self._validate_event_stream(event, stream_id)
-                    if event.seq in replayed_sequences:
+                    replayed = replayed_events.get(event.seq)
+                    if replayed is not None:
+                        if replayed != event:
+                            raise ValueError(
+                                "conflicting events for "
+                                f"stream_id={stream_id}, seq={event.seq}"
+                            )
                         continue
                     self.dispatcher.project(event)
                     self._raise_on_dispatch_error(stream_id)
-                    replayed_sequences.add(event.seq)
+                    replayed_events[event.seq] = event
                 if not self._covers_target_sequence(
-                    start_seq, target_seq, replayed_sequences
+                    start_seq, target_seq, set(replayed_events)
                 ):
                     raise RuntimeError(
                         "replay did not cover target sequence "
@@ -114,7 +130,14 @@ class ProjectionRuntime:
                 raise RuntimeError(f"recovery failed for {stream_id}")
             if state is ProjectionRuntimeState.RECOVERING:
                 buffer = self._buffers.setdefault(stream_id, {})
-                if event.seq not in buffer:
+                existing = buffer.get(event.seq)
+                if existing is not None:
+                    if existing != event:
+                        raise ValueError(
+                            "conflicting events for "
+                            f"stream_id={stream_id}, seq={event.seq}"
+                        )
+                else:
                     with self._buffer_count_lock:
                         if len(buffer) >= self.max_buffer_events:
                             raise RuntimeError(

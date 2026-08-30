@@ -856,6 +856,28 @@ G:\\Anaconda\\envs\\smallshrimp\\python.exe -m compileall -q src
 git diff --check
 ```
 
+## stream/seq 冲突事件拒绝
+
+问题：Runtime 缓冲和 Dispatcher gap 缓存原先按 `seq` 使用 `setdefault`，同一
+stream 的相同序号若携带不同 `event_id` 或 payload，后到事件会被静默丢弃。回放
+源返回重复序号时也可能产生不确定投影结果。
+
+决策：相同 stream/seq 的事件内容完全一致时视为重复投递并只处理一次；内容不一
+致时抛出冲突错误。该规则同时应用于 Runtime 实时缓冲、Dispatcher pending gap、
+Runtime 回放结果以及回放与实时缓冲的合并，冲突恢复进入 `FAILED`。
+
+TDD：新增 Runtime 缓冲、Dispatcher pending 和 Runtime 回放重复序号冲突测试；
+旧实现静默保留第一个事件，增加一致性比较后通过。
+
+验证：
+
+```text
+G:\\Anaconda\\envs\\smallshrimp\\python.exe -m pytest tests/test_storage_ports.py tests/test_events.py tests/test_recovery.py -q
+60 passed
+G:\\Anaconda\\envs\\smallshrimp\\python.exe -m compileall -q src
+git diff --check
+```
+
 ## ProjectionRuntime 回放水位完整性
 
 问题：`recover()` 读取的 `last_seq()` 可能高于 `list_after()` 实际返回的事件

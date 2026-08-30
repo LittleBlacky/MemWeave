@@ -238,6 +238,58 @@ def test_projection_runtime_rejects_replay_source_that_lags_target():
     assert runtime.state("session:lagging") is ProjectionRuntimeState.FAILED
 
 
+def test_projection_runtime_rejects_conflicting_duplicate_sequence_in_buffer():
+    from memweave.storage.recovery import ProjectionRuntime
+
+    def event(text):
+        return Event(
+            event_id=uuid4(),
+            event_type="code.test_passed",
+            stream_id="session:conflict",
+            seq=2,
+            actor="agent:codex",
+            payload={"text": text},
+        )
+
+    runtime = ProjectionRuntime(ProjectionDispatcher(), object())
+    runtime.publish(event("first"))
+
+    with pytest.raises(ValueError, match="conflicting events for stream_id=session:conflict"):
+        runtime.publish(event("second"))
+
+
+def test_projection_runtime_rejects_conflicting_duplicate_sequence_in_replay():
+    from memweave.storage.recovery import ProjectionRuntime, ProjectionRuntimeState
+
+    def event(text):
+        return Event(
+            event_id=uuid4(),
+            event_type="code.test_passed",
+            stream_id="session:replay-conflict",
+            seq=1,
+            actor="agent:codex",
+            payload={"text": text},
+        )
+
+    class ConflictingSource:
+        def last_seq(self, stream_id):
+            return 1
+
+        def list_after(self, stream_id, seq):
+            return [event("first"), event("second")]
+
+    backend = RecordingBackend()
+    dispatcher = ProjectionDispatcher()
+    dispatcher.register_backend(backend)
+    runtime = ProjectionRuntime(dispatcher, ConflictingSource())
+
+    with pytest.raises(ValueError, match="conflicting events for stream_id=session:replay-conflict"):
+        runtime.recover("session:replay-conflict")
+
+    assert backend.events == []
+    assert runtime.state("session:replay-conflict") is ProjectionRuntimeState.FAILED
+
+
 def test_projection_runtime_buffers_live_events_until_recovery_finishes(tmp_path):
     database = SQLiteDatabase(str(tmp_path / "recovery-buffer.db"))
     event_store = EventStore(database)

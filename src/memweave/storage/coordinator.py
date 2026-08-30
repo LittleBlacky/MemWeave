@@ -84,7 +84,14 @@ class ProjectionDispatcher:
                             self._clear_error(event.stream_id, name)
                             continue
                         pending = self._pending.setdefault((name, event.stream_id), {})
-                        if event.seq not in pending:
+                        existing = pending.get(event.seq)
+                        if existing is not None:
+                            if existing != event:
+                                raise ValueError(
+                                    "conflicting events for "
+                                    f"stream_id={event.stream_id}, seq={event.seq}"
+                                )
+                        else:
                             is_gap_filler = event.seq == checkpoint + 1
                             with self._pending_count_lock:
                                 if (

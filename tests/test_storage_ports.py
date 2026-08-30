@@ -641,6 +641,29 @@ def test_projection_checkpoint_does_not_skip_gaps_in_out_of_order_events(tmp_pat
     assert backend.events == [first.event_id, second.event_id, third.event_id]
 
 
+def test_projection_dispatcher_rejects_conflicting_duplicate_pending_sequence(tmp_path):
+    database = SQLiteDatabase(str(tmp_path / "pending-sequence-conflict.db"))
+    checkpoint_store = RelationalProjectionCheckpointStore(database)
+    dispatcher = ProjectionDispatcher(checkpoint_store=checkpoint_store)
+    dispatcher.register_backend(RecordingBackend())
+
+    def event(text):
+        return Event(
+            event_id=uuid4(),
+            event_type="code.test_passed",
+            stream_id="session:conflict",
+            seq=2,
+            actor="agent:codex",
+            payload={"text": text},
+        )
+
+    assert dispatcher.project(event("first")) == {"recording": 0}
+    assert dispatcher.project(event("second")) == {}
+    assert "conflicting events for stream_id=session:conflict, seq=2" in dispatcher.errors()[
+        "session:conflict"
+    ]["recording"]
+
+
 def test_projection_dispatcher_clears_pending_events_covered_by_external_checkpoint(tmp_path):
     database = SQLiteDatabase(str(tmp_path / "pending-checkpoint-cleanup.db"))
     checkpoint_store = RelationalProjectionCheckpointStore(database)
