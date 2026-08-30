@@ -40,6 +40,14 @@ class SessionState:
     active_memories: list[MemoryRecord] = field(default_factory=list)
 
 
+@dataclass(frozen=True)
+class SessionCommandResult:
+    """The authoritative event and resulting session projection state."""
+
+    event: Event
+    state: SessionState
+
+
 class SessionStore:
     """Durable, synchronous projection of one session's working state."""
 
@@ -61,23 +69,20 @@ class SessionStore:
             state = self._read(connection, session_id)
             if event.seq <= state.last_seq:
                 return state
-            if event.event_type in {
-                EventType.USER_MESSAGE.value,
-                EventType.MODEL_INPUT.value,
-                EventType.MODEL_OUTPUT.value,
-                EventType.TOOL_CALLED.value,
-                EventType.TOOL_COMPLETED.value,
-            } or event.event_type.startswith("turn."):
-                state.recent_messages.append(
-                    {
-                        "event_id": str(event.event_id),
-                        "seq": event.seq,
-                        "event_type": event.event_type,
-                        "actor": event.actor,
-                        "payload": event.payload,
-                    }
+            if event.event_type == EventType.MEMORY_COMMAND.value:
+                operation = self._operation_from_event(event)
+                if operation.scope is not MemoryScope.SESSION or operation.scope_id != session_id:
+                    raise ValueError(
+                        "memory.command operation scope does not match event session"
+                    )
+                self._apply_operation_to_state(
+                    state,
+                    operation,
+                    source_seq=event.seq,
+                    source_event_id=event.event_id,
                 )
-                state.recent_messages = state.recent_messages[-self.recent_limit :]
+            if self._is_recent_event(event):
+                self._append_recent_event(state, event)
             state.last_seq = event.seq
             self._write(connection, state)
             return state
@@ -97,17 +102,8 @@ class SessionStore:
         session_id = memory.scope_id
         with self.database.begin() as connection:
             state = self._read(connection, session_id)
-            existing_index = next(
-                (i for i, item in enumerate(state.active_memories) if item.key == memory.key),
-                None,
-            )
-            if existing_index is not None and state.active_memories[existing_index].source_seq > memory.source_seq:
-                return
-            if existing_index is None:
-                state.active_memories.append(memory)
-            else:
-                state.active_memories[existing_index] = memory
-            self._write(connection, state)
+            if self._upsert_memory_to_state(state, memory):
+                self._write(connection, state)
 
     def apply_operation(
         self,
@@ -139,71 +135,148 @@ class SessionStore:
         session_id = operation.scope_id
         with self.database.begin() as connection:
             state = self._read(connection, session_id)
-            existing_index = self._memory_index(state, operation)
-            existing = (
-                state.active_memories[existing_index]
-                if existing_index is not None
-                else None
-            )
-
-            if operation.operation is OperationType.FORGET:
-                if existing is None:
-                    return state
-                if source_seq < existing.source_seq:
-                    return state
-                del state.active_memories[existing_index]
-                self._write(connection, state)
-                return state
-
-            if operation.operation not in (OperationType.REMEMBER, OperationType.UPDATE):
-                raise ValueError(
-                    f"unsupported session operation: {operation.operation.value}"
-                )
-            if existing is not None:
-                if source_seq < existing.source_seq:
-                    return state
-                if source_seq == existing.source_seq:
-                    if (
-                        existing.value == operation.value
-                        and source_event_id_value in existing.source.event_ids
-                    ):
-                        return state
-                    raise StaleWriteError(
-                        f"conflicting session write for key {operation.key!r} at source_seq {source_seq}"
-                    )
-
-            if operation.operation is OperationType.UPDATE:
-                if existing is None or existing.version != operation.expected_version:
-                    actual = existing.version if existing is not None else None
-                    raise StaleWriteError(
-                        f"expected session version {operation.expected_version}, got {actual}"
-                    )
-                version = existing.version + 1
-                created_at = existing.created_at
-            else:
-                version = (existing.version + 1) if existing is not None else 1
-                created_at = existing.created_at if existing is not None else None
-
-            record = MemoryRecord(
-                kind=operation.kind or MemoryKind.WORKING,
-                scope=MemoryScope.SESSION,
-                scope_id=session_id,
-                key=operation.key,
-                value=operation.value,
-                status=MemoryStatus.SESSION_ONLY,
-                confidence=1.0,
-                source=operation.source
-                or MemorySource(type="explicit", event_ids=[source_event_id_value]),
+            if self._apply_operation_to_state(
+                state,
+                operation,
                 source_seq=source_seq,
-                version=version,
-                **({"created_at": created_at} if created_at is not None else {}),
-            )
-            if existing_index is None:
-                state.active_memories.append(record)
-            else:
-                state.active_memories[existing_index] = record
-            self._write(connection, state)
+                source_event_id=source_event_id_value,
+            ):
+                self._write(connection, state)
             return state
+
+    @staticmethod
+    def _is_recent_event(event: Event) -> bool:
+        return event.event_type in {
+            EventType.USER_MESSAGE.value,
+            EventType.MODEL_INPUT.value,
+            EventType.MODEL_OUTPUT.value,
+            EventType.TOOL_CALLED.value,
+            EventType.TOOL_COMPLETED.value,
+            EventType.MEMORY_COMMAND.value,
+        } or event.event_type.startswith("turn.")
+
+    def _append_recent_event(self, state: SessionState, event: Event) -> None:
+        state.recent_messages.append(
+            {
+                "event_id": str(event.event_id),
+                "seq": event.seq,
+                "event_type": event.event_type,
+                "actor": event.actor,
+                "payload": event.payload,
+            }
+        )
+        state.recent_messages = state.recent_messages[-self.recent_limit :]
+
+    @staticmethod
+    def _operation_from_event(event: Event) -> MemoryOperation:
+        raw_operation = event.payload.get("operation")
+        if not isinstance(raw_operation, dict):
+            raise ValueError("memory.command event payload requires an operation object")
+        try:
+            return MemoryOperation.model_validate(raw_operation)
+        except Exception as exc:
+            raise ValueError("memory.command event contains an invalid operation") from exc
+
+    @staticmethod
+    def _upsert_memory_to_state(state: SessionState, memory: MemoryRecord) -> bool:
+        existing_index = next(
+            (i for i, item in enumerate(state.active_memories) if item.key == memory.key),
+            None,
+        )
+        if existing_index is not None:
+            existing = state.active_memories[existing_index]
+            if existing.source_seq > memory.source_seq:
+                return False
+            if existing.source_seq == memory.source_seq:
+                if existing == memory:
+                    return False
+                raise StaleWriteError(
+                    f"conflicting session write for key {memory.key!r} at source_seq {memory.source_seq}"
+                )
+            state.active_memories[existing_index] = memory
+            return True
+        state.active_memories.append(memory)
+        return True
+
+    @classmethod
+    def _apply_operation_to_state(
+        cls,
+        state: SessionState,
+        operation: MemoryOperation,
+        *,
+        source_seq: int,
+        source_event_id: UUID | str,
+    ) -> bool:
+        source_event_id_value = str(source_event_id)
+        existing_index = cls._memory_index(state, operation)
+        existing = (
+            state.active_memories[existing_index]
+            if existing_index is not None
+            else None
+        )
+
+        if operation.operation is OperationType.FORGET:
+            if existing is None or source_seq < existing.source_seq:
+                return False
+            if source_seq == existing.source_seq and source_event_id_value not in existing.source.event_ids:
+                raise StaleWriteError(
+                    f"conflicting session forget for key {operation.key!r} at source_seq {source_seq}"
+                )
+            del state.active_memories[existing_index]
+            return True
+
+        if operation.operation not in (OperationType.REMEMBER, OperationType.UPDATE):
+            raise ValueError(
+                f"unsupported session operation: {operation.operation.value}"
+            )
+        if existing is not None:
+            if source_seq < existing.source_seq:
+                return False
+            if source_seq == existing.source_seq:
+                if (
+                    existing.value == operation.value
+                    and source_event_id_value in existing.source.event_ids
+                ):
+                    return False
+                raise StaleWriteError(
+                    f"conflicting session write for key {operation.key!r} at source_seq {source_seq}"
+                )
+
+        if operation.operation is OperationType.UPDATE:
+            if existing is None or existing.version != operation.expected_version:
+                actual = existing.version if existing is not None else None
+                raise StaleWriteError(
+                    f"expected session version {operation.expected_version}, got {actual}"
+                )
+            version = existing.version + 1
+            created_at = existing.created_at
+        else:
+            version = (existing.version + 1) if existing is not None else 1
+            created_at = existing.created_at if existing is not None else None
+
+        source = operation.source or MemorySource(
+            type="explicit", event_ids=[source_event_id_value]
+        )
+        if source_event_id_value not in source.event_ids:
+            source = MemorySource(
+                type=source.type,
+                event_ids=[*source.event_ids, source_event_id_value],
+                extractor=source.extractor,
+            )
+        record = MemoryRecord(
+            kind=operation.kind or MemoryKind.WORKING,
+            scope=MemoryScope.SESSION,
+            scope_id=operation.scope_id,
+            key=operation.key,
+            value=operation.value,
+            status=MemoryStatus.SESSION_ONLY,
+            confidence=1.0,
+            source=source,
+            source_seq=source_seq,
+            version=version,
+            **({"created_at": created_at} if created_at is not None else {}),
+        )
+        return cls._upsert_memory_to_state(state, record)
 
     @staticmethod
     def _memory_index(
@@ -270,5 +343,56 @@ class SessionStore:
     def _session_id_from_stream(stream_id: str) -> str:
         marker = "session:"
         if marker in stream_id:
-            return stream_id.rsplit(marker, 1)[1]
-        return stream_id
+            session_id = stream_id.rsplit(marker, 1)[1]
+        else:
+            session_id = stream_id
+        SessionStore._validate_session_id(session_id)
+        return session_id
+
+
+class SessionCommandCoordinator:
+    """Append explicit commands as events, then synchronously project them."""
+
+    def __init__(self, event_store, session_store: SessionStore):
+        if not hasattr(event_store, "append"):
+            raise TypeError("event_store must provide append()")
+        if not isinstance(session_store, SessionStore):
+            raise TypeError("session_store must be a SessionStore")
+        self.event_store = event_store
+        self.session_store = session_store
+
+    def append_explicit(
+        self,
+        operation: MemoryOperation,
+        *,
+        stream_id: str,
+        actor: str,
+        request_id: UUID,
+        event_id: UUID | None = None,
+        causation_id: UUID | None = None,
+        correlation_id: UUID | None = None,
+        idempotency_key: str | None = None,
+        protocol_version: str = "1.0",
+    ) -> SessionCommandResult:
+        if not isinstance(operation, MemoryOperation):
+            raise TypeError("operation must be a MemoryOperation")
+        if operation.scope is not MemoryScope.SESSION:
+            raise ValueError("explicit session command requires session scope")
+        event_session_id = self.session_store._session_id_from_stream(stream_id)
+        if operation.scope_id != event_session_id:
+            raise ValueError("operation scope_id does not match stream session")
+
+        event = self.event_store.append(
+            stream_id=stream_id,
+            event_type=EventType.MEMORY_COMMAND,
+            payload={"operation": operation.model_dump(mode="json")},
+            actor=actor,
+            request_id=request_id,
+            event_id=event_id,
+            causation_id=causation_id,
+            correlation_id=correlation_id,
+            idempotency_key=idempotency_key,
+            protocol_version=protocol_version,
+        )
+        state = self.session_store.apply_event(event)
+        return SessionCommandResult(event=event, state=state)

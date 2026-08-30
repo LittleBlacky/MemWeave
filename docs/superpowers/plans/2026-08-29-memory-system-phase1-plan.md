@@ -146,6 +146,7 @@ docs/superpowers/logs/
 
 **Interfaces:**
 - `SessionStore.apply_event(event: Event) -> SessionState`; `get(session_id) -> SessionState`; `upsert_active(memory) -> None`.
+- `SessionCommandCoordinator.append_explicit(operation, *, stream_id, actor, request_id, ...) -> SessionCommandResult`; EventStore 先提交 `memory.command`，再同步投影到 SessionStore。
 - `ExplicitOperationParser.parse(text, context: ParseContext) -> list[MemoryOperation]`.
 - `ParseContext` contains server-injected tenant/user/session/project and current source sequence.
 

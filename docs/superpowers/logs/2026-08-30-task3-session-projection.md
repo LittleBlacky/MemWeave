@@ -66,3 +66,24 @@ TDD 验证：新增 `tests/test_session_operations.py`，覆盖同步 remember/u
 
 当前边界：该方法仍只更新会话投影；长期权威记录、墓碑、Outbox 同事务编排分别由
 Task 4/5/7 负责。
+
+## 事件先落库与命令重放
+
+日期：2026-08-31
+
+- 新增 `SessionCommandCoordinator.append_explicit()`，统一执行“EventStore 先追加，
+  SessionStore 后投影”的显式命令流程；
+- `memory.command` 事件 payload 保存结构化 `MemoryOperation`，SessionStore 可从事件
+  自主重建操作，不依赖调用进程中的临时对象；
+- `SessionStore.apply_event()` 在同一个本地事务中完成命令操作、最近事件和 watermark
+  更新；操作校验失败时事务整体回滚；
+- 投影失败不会删除已提交事件，调用方可以从 EventStore 读取事件并重放；重复重放由
+  session watermark 和事件来源实现幂等；
+- coordinator 在追加前校验 operation scope 与 stream session 一致，防止写入幽灵 session。
+
+TDD 验证：新增 `tests/test_session_coordinator.py`，覆盖 EventStore 失败、投影失败后
+重放、重复命令、作用域不匹配和非法命令回滚；Task 3 相关测试 14 passed，全量测试
+98 passed。
+
+当前边界：本实现选择事件先落库和可恢复投影，不引入跨数据库分布式事务；Outbox、
+长期权威记忆和自然语言提取仍由后续 Task 负责。
