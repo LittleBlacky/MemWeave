@@ -21,7 +21,9 @@
 - Explicit remember/update/forget/confirm operations are synchronous and visible before the adapter acknowledges the turn.
 - Ordinary extraction and indexing are asynchronous, retryable, idempotent, and recoverable from the event log.
 - Memory data cannot override system instructions, tool permissions, or adapter capabilities.
-- Phase 1 implements text and structured values, deterministic recall, L1 and L3; vector, graph, LLM extraction, L2 proxy and automatic policy evolution remain later work.
+- Phase 1 implements text and structured values, deterministic recall, L1 and L3. Task 7 also defines the
+  pluggable natural-language extraction and policy gate needed by L1; concrete hosted LLM providers,
+  vector/graph indexes, L2 proxy and automatic policy evolution remain later work.
 - Phase 1 implements a SQLite relational adapter and defines ports for simultaneous vector, graph, keyword, KV, and blob backends; concrete external index adapters remain later work.
 
 ---
@@ -206,20 +208,28 @@ docs/superpowers/logs/
 
 **Files:**
 - Create: `src/memweave/kernel.py`
+- Create: `src/memweave/extraction.py`
 - Create: `src/memweave/adapters/base.py`
 - Create: `src/memweave/adapters/middleware.py`
-- Test: `tests/test_middleware_adapter.py`
+- Test: `tests/test_middleware_adapter.py`, `tests/test_extraction.py`
 
 **Interfaces:**
 - `MemoryKernel.append_event(...)`, `recall(request)`, `remember(operation)`, `forget(operation)`, `session_state(session_id)`.
+- `MemoryCandidate` contains a proposed operation, normalized key/value, scope hint, confidence,
+  evidence event IDs, and extractor metadata.
+- `MemoryExtractor.extract(events, context) -> list[MemoryCandidate]`; the extractor is replaceable,
+  so a rules-based implementation can be used without an LLM and an LLM provider can be added later.
+- `MemoryPolicy.evaluate(candidate, context) -> MemoryDecision`; the policy gate validates scope,
+  confidence, key/value shape, sensitive-data rules, and create/update/delete intent before persistence.
 - `AgentAdapter.capabilities() -> CapabilitySet`.
 - `L1Middleware.start_turn(TurnInput) -> TurnHandle`; `provide_context(handle) -> ContextEnvelope`; `record_event(handle, ProtocolEvent)`; `finish_turn(handle, TurnOutcome)`.
 
-- [ ] **Step 1: Write failing tests** proving middleware before-turn recall is automatic, explicit remember/update/forget is synchronous, after-turn emits events and enqueues extraction, and adapter reports `session_consistent` plus degradation flags.
+- [ ] **Step 1: Write failing tests** proving middleware before-turn recall is automatic, explicit remember/update/forget is synchronous, after-turn emits events and enqueues extraction, and adapter reports `session_consistent` plus degradation flags. Add natural-language cases such as “项目后续都得用 Python 来写”, ambiguous text returning no candidate, normalized project/user scope, and policy rejection of low-confidence or sensitive candidates.
 - [ ] **Step 2: Run `python -m pytest tests/test_middleware_adapter.py -q`** and verify failure.
-- [ ] **Step 3: Implement Kernel orchestration and L1 hooks**; short-circuit explicit commands before model execution, inject bounded context envelopes, propagate request/idempotency metadata, and never let memory text become instructions.
-- [ ] **Step 4: Run middleware adapter tests** with a fake host Agent and verify the N-turn race scenario returns the latest session projection.
-- [ ] **Step 5: Commit** with `feat: add l1 middleware adapter`.
+- [ ] **Step 3: Implement extraction and policy ports first**; keep explicit `CommandSpec/ParserRule` parsing deterministic, normalize natural-language candidates behind a replaceable extractor, and require the policy gate to approve every implicit write.
+- [ ] **Step 4: Implement Kernel orchestration and L1 hooks**; short-circuit explicit commands before model execution, inject bounded context envelopes, propagate request/idempotency metadata, enqueue ordinary extraction after the turn without blocking the next turn, and never let memory text become instructions.
+- [ ] **Step 5: Run middleware and extraction tests** with a fake host Agent and verify the N-turn race scenario returns the latest session projection even when extraction is delayed or retried.
+- [ ] **Step 6: Commit** with `feat: add l1 middleware and pluggable memory extraction`.
 
 ## Task 8: Tools/MCP Adapter and HTTP Surface
 
@@ -251,12 +261,12 @@ docs/superpowers/logs/
 - [ ] **Step 2: Run `python -m pytest tests/test_phase1_integration.py -q`** and verify only unimplemented behavior fails.
 - [ ] **Step 3: Implement missing integration glue** without bypassing Core interfaces; use fake clock and explicit worker ticks, never sleeps longer than 100 ms.
 - [ ] **Step 4: Run `python -m pytest -q`, `python -m compileall src`, and `git diff --check`.**
-- [ ] **Step 5: Document** Core/Protocol/Adapter boundaries, L1/L3 examples, consistency modes, worker startup, and L2 deferral in `README.md`.
+- [ ] **Step 5: Document** Core/Protocol/Adapter boundaries, L1/L3 examples, consistency modes, worker startup, natural-language extraction/policy boundaries, and L2 deferral in `README.md`.
 - [ ] **Step 6: Commit** with `test: verify phase one protocol and memory recovery`.
 
 ## Plan Self-Review
 
-Spec coverage: Tasks 1–2 cover protocol metadata and event sourcing; Tasks 3–6 cover session, durable state, lifecycle, outbox, recall, scope, and budgets; Tasks 7–8 cover the required L1 and L3 adapter contracts and HTTP/tool governance; Task 9 covers phase-one acceptance and documentation. L2, vector, graph, extraction, experience synthesis, and policy evolution are explicitly deferred as required by the spec.
+Spec coverage: Tasks 1–2 cover protocol metadata and event sourcing; Tasks 3–6 cover session, durable state, lifecycle, outbox, recall, scope, and budgets; Task 7 covers the required L1 adapter contract plus replaceable natural-language extraction and policy gates; Task 8 covers L3 adapter contracts and HTTP/tool governance; Task 9 covers phase-one acceptance and documentation. Hosted LLM providers, vector/graph indexes, L2 proxy, experience synthesis, and automatic policy evolution remain deferred.
 
 Placeholder scan: No TODO/TBD or unspecified test steps are used. Every public type and method referenced by a later task is defined in an earlier task.
 
