@@ -38,3 +38,13 @@ git diff --check
   Task 2 迁移契约的前提下补充专用 migration。
 - 显式 parser 当前只生成结构化操作，不负责执行操作或写入长期权威表。
 - Outbox、Durable Memory Store、Recall 和 Adapter 由后续 Task 实现。
+
+## 可注册 CommandSpec/ParserRule
+
+- 将固定正则命令改为声明式 `CommandSpec` 和编译后的 `ParserRule`；
+- `ExplicitOperationParser.register()` 支持运行时注册新别名和 assignment/key 语法；
+- 默认中文/英文 remember、update、forget 规则保持不变；
+- 重复别名和不支持的语法会在注册时拒绝；
+- 新增自定义“保存”命令回归测试。
+
+验证：`tests/test_session_consistency.py` 共 5 个测试通过。
