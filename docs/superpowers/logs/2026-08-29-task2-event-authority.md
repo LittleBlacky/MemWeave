@@ -833,6 +833,29 @@ G:\\Anaconda\\envs\\smallshrimp\\python.exe -m compileall -q src
 git diff --check
 ```
 
+## 迁移并发重试的跨数据库异常
+
+问题：虽然 `MigrationRunner.applied()` 已能识别 PostgreSQL/MySQL 的缺表
+`ProgrammingError`，但数据库适配器的迁移事务重试仍只捕获
+`IntegrityError`/`OperationalError`。并发建表时，后到实例收到
+`ProgrammingError: relation ... already exists` 会直接启动失败。
+
+决策：`SQLAlchemyDatabase.apply_migrations()` 同时捕获 `ProgrammingError`，并
+将其中明确包含 `already exists` 的错误纳入有限重试；语法、权限等其它
+`ProgrammingError` 仍不可重试并继续传播。
+
+TDD：新增跨数据库“已存在”与普通语法错误的判断测试；修复后前者可重试、后者
+保持不可重试，现有 SQLite 并发迁移测试继续通过。
+
+验证：
+
+```text
+G:\\Anaconda\\envs\\smallshrimp\\python.exe -m pytest tests/test_storage_ports.py -q
+40 passed
+G:\\Anaconda\\envs\\smallshrimp\\python.exe -m compileall -q src
+git diff --check
+```
+
 ## ProjectionRuntime 回放水位完整性
 
 问题：`recover()` 读取的 `last_seq()` 可能高于 `list_after()` 实际返回的事件

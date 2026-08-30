@@ -6,7 +6,7 @@ from typing import Iterator, List, Optional
 
 from sqlalchemy import create_engine
 from sqlalchemy.engine import Connection, Engine
-from sqlalchemy.exc import IntegrityError, OperationalError
+from sqlalchemy.exc import IntegrityError, OperationalError, ProgrammingError
 
 from .migrations import MigrationRunner
 
@@ -39,7 +39,7 @@ class SQLAlchemyDatabase:
             try:
                 with self.begin() as connection:
                     return self.migrations.apply(connection)
-            except (IntegrityError, OperationalError) as exc:
+            except (IntegrityError, OperationalError, ProgrammingError) as exc:
                 if (
                     attempt >= self.max_migration_retries
                     or not self._is_retryable_migration_error(exc)
@@ -63,7 +63,7 @@ class SQLAlchemyDatabase:
     def _is_retryable_migration_error(error: Exception) -> bool:
         if isinstance(error, IntegrityError):
             return True
-        if isinstance(error, OperationalError):
+        if isinstance(error, (OperationalError, ProgrammingError)):
             message = str(error).lower()
             return any(
                 marker in message

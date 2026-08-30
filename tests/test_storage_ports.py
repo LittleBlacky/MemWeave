@@ -119,6 +119,22 @@ def test_generic_sqlalchemy_database_migrations_are_safe_under_concurrent_startu
     ]
 
 
+def test_migration_retry_recognizes_cross_database_already_exists_errors():
+    already_exists = ProgrammingError(
+        "CREATE TABLE schema_migrations",
+        {},
+        Exception('relation "schema_migrations" already exists'),
+    )
+    syntax_error = ProgrammingError(
+        "CREATE TABLE schema_migrations",
+        {},
+        Exception("syntax error at or near TABLE"),
+    )
+
+    assert SQLAlchemyDatabase._is_retryable_migration_error(already_exists)
+    assert not SQLAlchemyDatabase._is_retryable_migration_error(syntax_error)
+
+
 def test_migration_runner_executes_python_migration_with_semicolons_in_values(tmp_path):
     migration_dir = tmp_path / "migrations"
     migration_dir.mkdir()
