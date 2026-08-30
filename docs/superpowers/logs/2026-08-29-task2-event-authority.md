@@ -768,6 +768,27 @@ G:\\Anaconda\\envs\\smallshrimp\\python.exe -m compileall -q src
 git diff --check
 ```
 
+## ProjectionRuntime stream_id 校验一致性
+
+问题：Runtime 的 `state`、`recover` 和 `clear_buffer` 共用校验函数，但旧实现将
+非字符串值和空字符串都报告为 `ValueError`，与 Task 2 统一公共接口约定不符。
+
+决策：非字符串 `stream_id` 抛出 `TypeError("stream_id must be a string")`；空白
+字符串继续抛出 `ValueError("stream_id must not be blank")`，与 Dispatcher 和
+checkpoint store 保持一致。
+
+TDD：新增三个 Runtime 公开方法的类型/空值回归测试；旧实现将 `None`、整数和
+空字符串混为同一错误，拆分校验后通过。
+
+验证：
+
+```text
+G:\\Anaconda\\envs\\smallshrimp\\python.exe -m pytest tests/test_recovery.py -q
+8 passed
+G:\\Anaconda\\envs\\smallshrimp\\python.exe -m compileall -q src
+git diff --check
+```
+
 ## Dispatcher 输入语义和状态回收修复
 
 问题：ProjectionDispatcher 的 stream 标识符校验将类型错误误报为

@@ -164,6 +164,20 @@ def test_projection_runtime_bounds_recovery_buffers_and_supports_clear():
     runtime.publish(event("session:two", 2))
 
 
+def test_projection_runtime_distinguishes_invalid_stream_id_types():
+    from memweave.storage.recovery import ProjectionRuntime
+
+    runtime = ProjectionRuntime(ProjectionDispatcher(), object())
+
+    for method in (runtime.state, runtime.recover, runtime.clear_buffer):
+        with pytest.raises(TypeError, match="stream_id must be a string"):
+            method(None)
+        with pytest.raises(TypeError, match="stream_id must be a string"):
+            method(123)
+        with pytest.raises(ValueError, match="stream_id must not be blank"):
+            method("   ")
+
+
 def test_projection_runtime_buffers_live_events_until_recovery_finishes(tmp_path):
     database = SQLiteDatabase(str(tmp_path / "recovery-buffer.db"))
     event_store = EventStore(database)

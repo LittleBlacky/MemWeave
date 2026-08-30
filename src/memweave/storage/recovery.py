@@ -156,5 +156,7 @@ class ProjectionRuntime:
 
     @staticmethod
     def _validate_stream_id(stream_id: str) -> None:
-        if not isinstance(stream_id, str) or not stream_id.strip():
+        if not isinstance(stream_id, str):
+            raise TypeError("stream_id must be a string")
+        if not stream_id.strip():
             raise ValueError("stream_id must not be blank")
