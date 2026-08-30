@@ -48,7 +48,7 @@ class ExplicitOperationParser:
 
     def __init__(self, rules: tuple[CommandSpec, ...] | None = None):
         self._rules: list[ParserRule] = []
-        defaults = rules or (
+        defaults = rules if rules is not None else (
             CommandSpec(OperationType.REMEMBER, ("记住", "remember"), "assignment"),
             CommandSpec(OperationType.UPDATE, ("更新", "修改", "改成", "update"), "assignment"),
             CommandSpec(OperationType.FORGET, ("忘记", "删除", "forget", "delete"), "key"),

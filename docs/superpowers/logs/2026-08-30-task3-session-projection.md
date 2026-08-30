@@ -45,6 +45,7 @@ git diff --check
 - `ExplicitOperationParser.register()` 支持运行时注册新别名和 assignment/key 语法；
 - 默认中文/英文 remember、update、forget 规则保持不变；
 - 重复别名和不支持的语法会在注册时拒绝；
-- 新增自定义“保存”命令回归测试。
+- 通过自定义“保存”命令的注册与解析回归验证。
 
-验证：`tests/test_session_consistency.py` 共 5 个测试通过。
+验证：`tests/test_session_consistency.py` 的 4 个原有测试通过；另行验证自定义
+“保存”命令注册后可正确解析。
