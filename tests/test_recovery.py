@@ -290,6 +290,46 @@ def test_projection_runtime_rejects_conflicting_duplicate_sequence_in_replay():
     assert runtime.state("session:replay-conflict") is ProjectionRuntimeState.FAILED
 
 
+def test_projection_runtime_preserves_unprocessed_buffer_after_recovery_failure():
+    from memweave.storage.recovery import ProjectionRuntime, ProjectionRuntimeState
+
+    class FailingBackend(RecordingBackend):
+        def apply(self, event):
+            raise RuntimeError("projection unavailable")
+
+    class EmptySource:
+        def last_seq(self, stream_id):
+            return 0
+
+        def list_after(self, stream_id, seq):
+            return []
+
+    def event(seq):
+        return Event(
+            event_id=uuid4(),
+            event_type="code.test_passed",
+            stream_id="session:failed-buffer",
+            seq=seq,
+            actor="agent:codex",
+            payload={"seq": seq},
+        )
+
+    backend = FailingBackend()
+    dispatcher = ProjectionDispatcher()
+    dispatcher.register_backend(backend)
+    runtime = ProjectionRuntime(dispatcher, EmptySource())
+    first, second = event(1), event(2)
+    runtime.publish(first)
+    runtime.publish(second)
+
+    with pytest.raises(RuntimeError, match="projection failed during recovery"):
+        runtime.recover("session:failed-buffer")
+
+    assert list(runtime._buffers["session:failed-buffer"]) == [1, 2]
+    assert runtime._buffer_count == 2
+    assert runtime.state("session:failed-buffer") is ProjectionRuntimeState.FAILED
+
+
 def test_projection_runtime_buffers_live_events_until_recovery_finishes(tmp_path):
     database = SQLiteDatabase(str(tmp_path / "recovery-buffer.db"))
     event_store = EventStore(database)

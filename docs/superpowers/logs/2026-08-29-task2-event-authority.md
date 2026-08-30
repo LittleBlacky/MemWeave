@@ -899,6 +899,28 @@ G:\\Anaconda\\envs\\smallshrimp\\python.exe -m compileall -q src
 git diff --check
 ```
 
+## ProjectionRuntime 失败时保留未处理缓冲
+
+问题：Runtime 排空恢复期间实时缓冲前，旧实现会先清空整个 buffer 并一次性减少
+总计数。若第一个事件投影失败，当前及后续尚未处理的事件已经从内存删除，且
+Runtime 进入 `FAILED`，可能丢失尚未落入权威 EventStore 的实时事件。
+
+决策：缓冲事件逐条处理；只有确认与回放事件完全重复，或投影成功后，才从
+buffer 删除对应序号并减少总计数。任何校验或投影失败都会保留当前及后续事件，
+供调用方在恢复权威源后重试或显式清理。
+
+TDD：新增两条缓冲事件、第一条投影失败的回归测试；旧实现清空全部缓冲，调整为
+成功后删除后，两条未处理事件和计数均被保留。
+
+验证：
+
+```text
+G:\\Anaconda\\envs\\smallshrimp\\python.exe -m pytest tests/test_recovery.py -q
+13 passed
+G:\\Anaconda\\envs\\smallshrimp\\python.exe -m compileall -q src
+git diff --check
+```
+
 ## ProjectionRuntime 回放水位完整性
 
 问题：`recover()` 读取的 `last_seq()` 可能高于 `list_after()` 实际返回的事件

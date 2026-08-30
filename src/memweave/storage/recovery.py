@@ -84,12 +84,7 @@ class ProjectionRuntime:
 
             with lock:
                 buffer = self._buffers.get(stream_id, {})
-                buffered = sorted(buffer.values(), key=lambda item: item.seq)
-                removed = len(buffer)
-                self._buffers[stream_id] = {}
-                with self._buffer_count_lock:
-                    self._buffer_count -= removed
-                for event in buffered:
+                for event in sorted(buffer.values(), key=lambda item: item.seq):
                     self._validate_event_stream(event, stream_id)
                     replayed = replayed_events.get(event.seq)
                     if replayed is not None:
@@ -98,10 +93,16 @@ class ProjectionRuntime:
                                 "conflicting events for "
                                 f"stream_id={stream_id}, seq={event.seq}"
                             )
+                        buffer.pop(event.seq, None)
+                        with self._buffer_count_lock:
+                            self._buffer_count -= 1
                         continue
                     self.dispatcher.project(event)
                     self._raise_on_dispatch_error(stream_id)
                     replayed_events[event.seq] = event
+                    buffer.pop(event.seq, None)
+                    with self._buffer_count_lock:
+                        self._buffer_count -= 1
                 if not self._covers_target_sequence(
                     start_seq, target_seq, set(replayed_events)
                 ):
