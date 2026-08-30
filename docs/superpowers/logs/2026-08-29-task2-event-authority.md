@@ -789,6 +789,28 @@ G:\\Anaconda\\envs\\smallshrimp\\python.exe -m compileall -q src
 git diff --check
 ```
 
+## ProjectionRuntime 回放 stream 隔离
+
+问题：`EventReplaySource` 是可替换协议，Runtime 旧实现默认其
+`list_after(stream_id, seq)` 永远只返回目标 stream 的事件，未对返回值再次校验。
+一旦缓存层或第三方实现返回其它 stream 的事件，Runtime 会把它投影到错误的会话
+并仍将目标 stream 标记为 `READY`。
+
+决策：回放和恢复缓冲排空前统一验证 `event.stream_id == stream_id`。不匹配时
+抛出明确的 `ValueError`，由恢复流程转入 `FAILED`，且不调用投影器。
+
+TDD：新增错误 stream 回放回归测试；旧实现错误投影了其它 stream，增加边界校验
+后通过并确认目标 Runtime 进入失败状态。
+
+验证：
+
+```text
+G:\\Anaconda\\envs\\smallshrimp\\python.exe -m pytest tests/test_recovery.py -q
+9 passed
+G:\\Anaconda\\envs\\smallshrimp\\python.exe -m compileall -q src
+git diff --check
+```
+
 ## Dispatcher 输入语义和状态回收修复
 
 问题：ProjectionDispatcher 的 stream 标识符校验将类型错误误报为

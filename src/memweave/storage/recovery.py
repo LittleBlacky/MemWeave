@@ -67,6 +67,7 @@ class ProjectionRuntime:
             replay = self.event_source.list_after(stream_id, start_seq)
             replayed_sequences = set()
             for event in sorted(replay, key=lambda item: item.seq):
+                self._validate_event_stream(event, stream_id)
                 self.dispatcher.project(event)
                 self._raise_on_dispatch_error(stream_id)
                 replayed_sequences.add(event.seq)
@@ -81,6 +82,7 @@ class ProjectionRuntime:
                 for event in buffered:
                     if event.seq in replayed_sequences:
                         continue
+                    self._validate_event_stream(event, stream_id)
                     self.dispatcher.project(event)
                     self._raise_on_dispatch_error(stream_id)
                 self._states[stream_id] = ProjectionRuntimeState.READY
@@ -140,6 +142,13 @@ class ProjectionRuntime:
             raise TypeError(f"{name} must be an integer")
         if value < 1:
             raise ValueError(f"{name} must be positive")
+
+    @staticmethod
+    def _validate_event_stream(event: Event, stream_id: str) -> None:
+        if event.stream_id != stream_id:
+            raise ValueError(
+                "replay event stream_id does not match requested stream_id"
+            )
 
     def _raise_on_dispatch_error(self, stream_id: str) -> None:
         errors = self.dispatcher.errors(stream_id)

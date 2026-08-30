@@ -178,6 +178,37 @@ def test_projection_runtime_distinguishes_invalid_stream_id_types():
             method("   ")
 
 
+def test_projection_runtime_rejects_replay_events_from_another_stream():
+    from memweave.storage.recovery import ProjectionRuntime, ProjectionRuntimeState
+
+    wrong_stream_event = Event(
+        event_id=uuid4(),
+        event_type="code.test_passed",
+        stream_id="session:other",
+        seq=1,
+        actor="agent:codex",
+        payload={},
+    )
+
+    class SourceWithWrongStream:
+        def last_seq(self, stream_id):
+            return 1
+
+        def list_after(self, stream_id, seq):
+            return [wrong_stream_event]
+
+    backend = RecordingBackend()
+    dispatcher = ProjectionDispatcher()
+    dispatcher.register_backend(backend)
+    runtime = ProjectionRuntime(dispatcher, SourceWithWrongStream())
+
+    with pytest.raises(ValueError, match="replay event stream_id does not match"):
+        runtime.recover("session:expected")
+
+    assert backend.events == []
+    assert runtime.state("session:expected") is ProjectionRuntimeState.FAILED
+
+
 def test_projection_runtime_buffers_live_events_until_recovery_finishes(tmp_path):
     database = SQLiteDatabase(str(tmp_path / "recovery-buffer.db"))
     event_store = EventStore(database)
