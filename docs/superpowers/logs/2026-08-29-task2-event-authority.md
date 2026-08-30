@@ -811,6 +811,28 @@ G:\\Anaconda\\envs\\smallshrimp\\python.exe -m compileall -q src
 git diff --check
 ```
 
+## MigrationRunner 跨数据库缺表异常
+
+问题：`MigrationRunner.applied()` 只捕获 `OperationalError`。SQLite 将迁移表
+缺失映射为该异常，但 PostgreSQL/MySQL 通常映射为 `ProgrammingError`，导致新
+数据库查询已应用迁移版本时不能按约定返回空列表。
+
+决策：同时捕获 SQLAlchemy 的 `OperationalError` 和 `ProgrammingError`，仅当错误
+文本明确表示 `schema_migrations` 不存在时返回 `[]`；其它数据库异常继续传播，
+避免扩大原有异常吞噬范围。
+
+TDD：新增跨数据库 `ProgrammingError` 缺表回归测试，并保留意外 `RuntimeError`
+继续传播的测试；修复后两者均通过。
+
+验证：
+
+```text
+G:\\Anaconda\\envs\\smallshrimp\\python.exe -m pytest tests/test_storage_ports.py -q
+40 passed
+G:\\Anaconda\\envs\\smallshrimp\\python.exe -m compileall -q src
+git diff --check
+```
+
 ## Dispatcher 输入语义和状态回收修复
 
 问题：ProjectionDispatcher 的 stream 标识符校验将类型错误误报为

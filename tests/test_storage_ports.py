@@ -5,6 +5,7 @@ from uuid import uuid4
 
 import pytest
 from sqlalchemy import text
+from sqlalchemy.exc import ProgrammingError
 
 from memweave.events import EventStore
 from memweave.models import Event
@@ -68,6 +69,18 @@ def test_migration_runner_applied_propagates_unexpected_database_errors():
 
     with pytest.raises(RuntimeError, match="database connection lost"):
         MigrationRunner().applied(BrokenConnection())
+
+
+def test_migration_runner_applied_handles_cross_database_missing_table_errors():
+    class UnmigratedConnection:
+        def execute(self, *args, **kwargs):
+            raise ProgrammingError(
+                "SELECT ...",
+                {},
+                Exception('relation "schema_migrations" does not exist'),
+            )
+
+    assert MigrationRunner().applied(UnmigratedConnection()) == []
 
 
 def test_generic_sqlalchemy_database_can_apply_core_migration(tmp_path):

@@ -10,7 +10,7 @@ from importlib.resources import files
 
 from sqlalchemy import insert, select
 from sqlalchemy.engine import Connection
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import OperationalError, ProgrammingError
 
 from .schema import schema_migrations_table
 
@@ -85,14 +85,14 @@ class MigrationRunner:
             rows = connection.execute(
                 select(schema_migrations_table.c.version).order_by(schema_migrations_table.c.version)
             ).fetchall()
-        except OperationalError as exc:
+        except (OperationalError, ProgrammingError) as exc:
             if self._is_missing_migrations_table(exc):
                 return []
             raise
         return [row[0] for row in rows]
 
     @staticmethod
-    def _is_missing_migrations_table(error: OperationalError) -> bool:
+    def _is_missing_migrations_table(error: OperationalError | ProgrammingError) -> bool:
         message = str(error).lower()
         return any(
             marker in message
