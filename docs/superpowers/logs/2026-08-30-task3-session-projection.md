@@ -49,3 +49,20 @@ git diff --check
 
 验证：`tests/test_session_consistency.py` 的 4 个原有测试通过；另行验证自定义
 “保存”命令注册后可正确解析。
+
+## 显式操作同步投影
+
+日期：2026-08-31
+
+- 新增 `SessionStore.apply_operation()`，将可信边界传入的
+  `MemoryOperation` 同步应用到当前 session 的活动记忆；
+- `REMEMBER`/`UPDATE` 生成 session-only working record，`FORGET` 从当前活动投影移除；
+- `source_seq` 用于拒绝旧写入，`expected_version` 用于 compare-and-swap 更新；
+- 使用 `source_event_id` 识别重复投递；同一序号不同内容抛出 `StaleWriteError`，不静默覆盖；
+- 操作仅接受 session scope，身份和最终来源序号仍由可信适配器传入，不能从用户文本获得。
+
+TDD 验证：新增 `tests/test_session_operations.py`，覆盖同步 remember/update/forget、
+版本冲突、重复投递和同序号内容冲突；Task 3 相关测试共 8 passed。
+
+当前边界：该方法仍只更新会话投影；长期权威记录、墓碑、Outbox 同事务编排分别由
+Task 4/5/7 负责。

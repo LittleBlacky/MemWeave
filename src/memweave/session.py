@@ -3,10 +3,22 @@
 import json
 from dataclasses import dataclass, field
 from typing import Any
+from uuid import UUID
 
 from sqlalchemy import Column, Integer, MetaData, String, Table, Text, select, update
 
-from .models import Event, EventType, MemoryRecord, MemoryScope
+from .errors import StaleWriteError
+from .models import (
+    Event,
+    EventType,
+    MemoryKind,
+    MemoryOperation,
+    MemoryRecord,
+    MemoryScope,
+    MemorySource,
+    MemoryStatus,
+    OperationType,
+)
 
 
 _metadata = MetaData()
@@ -96,6 +108,118 @@ class SessionStore:
             else:
                 state.active_memories[existing_index] = memory
             self._write(connection, state)
+
+    def apply_operation(
+        self,
+        operation: MemoryOperation,
+        *,
+        source_seq: int,
+        source_event_id: UUID | str,
+    ) -> SessionState:
+        """Apply one trusted explicit operation to the session projection.
+
+        ``source_seq`` and ``source_event_id`` are supplied by the event/adapter
+        boundary, never parsed from user text.  The method is intentionally
+        session-scoped; durable cross-session authority is handled later.
+        """
+        if not isinstance(operation, MemoryOperation):
+            raise TypeError("operation must be a MemoryOperation")
+        if operation.scope is not MemoryScope.SESSION:
+            raise ValueError("session projection requires session-scoped operation")
+        if not isinstance(source_seq, int) or isinstance(source_seq, bool):
+            raise TypeError("source_seq must be an integer")
+        if source_seq < 1:
+            raise ValueError("source_seq must be positive")
+        if not isinstance(source_event_id, (UUID, str)):
+            raise TypeError("source_event_id must be a UUID or string")
+        source_event_id_value = str(source_event_id)
+        if not source_event_id_value.strip():
+            raise ValueError("source_event_id must not be blank")
+
+        session_id = operation.scope_id
+        with self.database.begin() as connection:
+            state = self._read(connection, session_id)
+            existing_index = self._memory_index(state, operation)
+            existing = (
+                state.active_memories[existing_index]
+                if existing_index is not None
+                else None
+            )
+
+            if operation.operation is OperationType.FORGET:
+                if existing is None:
+                    return state
+                if source_seq < existing.source_seq:
+                    return state
+                del state.active_memories[existing_index]
+                self._write(connection, state)
+                return state
+
+            if operation.operation not in (OperationType.REMEMBER, OperationType.UPDATE):
+                raise ValueError(
+                    f"unsupported session operation: {operation.operation.value}"
+                )
+            if existing is not None:
+                if source_seq < existing.source_seq:
+                    return state
+                if source_seq == existing.source_seq:
+                    if (
+                        existing.value == operation.value
+                        and source_event_id_value in existing.source.event_ids
+                    ):
+                        return state
+                    raise StaleWriteError(
+                        f"conflicting session write for key {operation.key!r} at source_seq {source_seq}"
+                    )
+
+            if operation.operation is OperationType.UPDATE:
+                if existing is None or existing.version != operation.expected_version:
+                    actual = existing.version if existing is not None else None
+                    raise StaleWriteError(
+                        f"expected session version {operation.expected_version}, got {actual}"
+                    )
+                version = existing.version + 1
+                created_at = existing.created_at
+            else:
+                version = (existing.version + 1) if existing is not None else 1
+                created_at = existing.created_at if existing is not None else None
+
+            record = MemoryRecord(
+                kind=operation.kind or MemoryKind.WORKING,
+                scope=MemoryScope.SESSION,
+                scope_id=session_id,
+                key=operation.key,
+                value=operation.value,
+                status=MemoryStatus.SESSION_ONLY,
+                confidence=1.0,
+                source=operation.source
+                or MemorySource(type="explicit", event_ids=[source_event_id_value]),
+                source_seq=source_seq,
+                version=version,
+                **({"created_at": created_at} if created_at is not None else {}),
+            )
+            if existing_index is None:
+                state.active_memories.append(record)
+            else:
+                state.active_memories[existing_index] = record
+            self._write(connection, state)
+            return state
+
+    @staticmethod
+    def _memory_index(
+        state: SessionState, operation: MemoryOperation
+    ) -> int | None:
+        if operation.key is not None:
+            return next(
+                (i for i, item in enumerate(state.active_memories) if item.key == operation.key),
+                None,
+            )
+        if operation.memory_id is not None:
+            return next(
+                (i for i, item in enumerate(state.active_memories) if item.id == operation.memory_id),
+                None,
+            )
+        return None
 
     @staticmethod
     def _read(connection, session_id: str) -> SessionState:
