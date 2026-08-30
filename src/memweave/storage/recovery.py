@@ -110,7 +110,7 @@ class ProjectionRuntime:
                         f"for stream_id={stream_id}"
                     )
                 self._states[stream_id] = ProjectionRuntimeState.READY
-            return target_seq
+            return max(replayed_events, default=target_seq)
         except Exception:
             with lock:
                 self._states[stream_id] = ProjectionRuntimeState.FAILED

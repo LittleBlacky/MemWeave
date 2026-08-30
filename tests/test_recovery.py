@@ -137,7 +137,7 @@ def test_projection_runtime_does_not_drop_events_seen_after_recovery_target():
 
     runtime = ProjectionRuntime(dispatcher, SourceWithLateEvent())
 
-    runtime.recover("session:late-replay")
+    assert runtime.recover("session:late-replay") == 3
 
     assert backend.events == [event.event_id for event in replayed]
 
@@ -329,7 +329,7 @@ def test_projection_runtime_buffers_live_events_until_recovery_finishes(tmp_path
         runtime.publish(live_event)
         assert backend.events == []
         source.release.set()
-        assert future.result(timeout=5) == 2
+        assert future.result(timeout=5) == 3
 
     assert backend.events == [events[0].event_id, events[1].event_id, live_event.event_id]
 

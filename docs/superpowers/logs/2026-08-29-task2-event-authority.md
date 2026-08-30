@@ -878,6 +878,27 @@ G:\\Anaconda\\envs\\smallshrimp\\python.exe -m compileall -q src
 git diff --check
 ```
 
+## ProjectionRuntime 返回实际恢复水位
+
+问题：恢复开始时读取的 `target_seq` 可能落后于回放结果或恢复期间缓冲的实时
+事件。旧实现虽然会处理这些晚到事件，却仍返回初始 `target_seq`，使调用方看到
+的恢复进度低于后端实际投影水位。
+
+决策：`recover()` 返回本次回放和缓冲排空过程中实际处理的最高序号；无事件时
+仍返回初始目标水位。这样返回值与实际完成进度一致，同时保留已有目标水位语义。
+
+TDD：更新晚到回放和恢复期间实时事件测试，分别确认返回值反映最高已处理序号；
+修复后恢复专项测试通过。
+
+验证：
+
+```text
+G:\\Anaconda\\envs\\smallshrimp\\python.exe -m pytest tests/test_recovery.py -q
+12 passed
+G:\\Anaconda\\envs\\smallshrimp\\python.exe -m compileall -q src
+git diff --check
+```
+
 ## ProjectionRuntime 回放水位完整性
 
 问题：`recover()` 读取的 `last_seq()` 可能高于 `list_after()` 实际返回的事件
