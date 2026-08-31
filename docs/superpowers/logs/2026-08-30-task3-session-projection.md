@@ -165,3 +165,17 @@ TDD 验证：新增 Parser 连续两次 UPDATE 测试，Task 3 相关测试 21 p
 - 保留 `upsert_active()` 兼容签名，但不再保留与操作入口不同的冲突语义。
 
 TDD 验证：新增直接 upsert 的水位、重复和冲突测试，Task 3 相关测试 22 passed。
+
+## Tenant/session 身份隔离
+
+日期：2026-08-31
+
+- `SessionStore` 增加可选 `tenant_id` 命名空间；多租户实例将 session 快照键隔离为
+  `<tenant_id>:session:<session_id>`；
+- 配置租户后只接受对应的 `tenant:<tenant_id>:session:<session_id>` stream，跨租户
+  事件在投影入口拒绝；
+- `stream_id_for_session()` 和 `SessionReadBarrier` 会生成匹配租户的规范 stream；
+- 未配置 tenant_id 的实例保留旧的全局命名空间，仅用于兼容单租户/迁移场景；多租户
+  生产路径必须显式配置 tenant_id。
+
+TDD 验证：新增同名 session 的双租户隔离和 foreign stream 拒绝测试。

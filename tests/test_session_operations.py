@@ -188,3 +188,43 @@ def test_upsert_active_uses_event_watermark_and_conflict_rules(tmp_path):
 
     with pytest.raises(ValueError, match="session watermark"):
         store.upsert_active(record(event_id=uuid4(), source_seq=2))
+
+
+def test_session_store_namespaces_state_by_tenant(tmp_path):
+    database = Database(str(tmp_path / "memory.db"))
+    tenant_a = SessionStore(database, tenant_id="tenant-a")
+    tenant_b = SessionStore(database, tenant_id="tenant-b")
+
+    event_a = Event(
+        event_type=EventType.USER_MESSAGE,
+        stream_id="tenant:tenant-a:session:s1",
+        seq=1,
+        actor="user:a",
+        payload={"text": "A"},
+    )
+    event_b = Event(
+        event_type=EventType.USER_MESSAGE,
+        stream_id="tenant:tenant-b:session:s1",
+        seq=1,
+        actor="user:b",
+        payload={"text": "B"},
+    )
+    tenant_a.apply_event(event_a)
+    tenant_b.apply_event(event_b)
+
+    assert tenant_a.get("s1").recent_messages[0]["payload"]["text"] == "A"
+    assert tenant_b.get("s1").recent_messages[0]["payload"]["text"] == "B"
+
+
+def test_tenant_session_store_rejects_foreign_stream_id(tmp_path):
+    store = SessionStore(Database(str(tmp_path / "memory.db")), tenant_id="tenant-a")
+    event = Event(
+        event_type=EventType.USER_MESSAGE,
+        stream_id="tenant:tenant-b:session:s1",
+        seq=1,
+        actor="user:b",
+        payload={"text": "B"},
+    )
+
+    with pytest.raises(ValueError, match="tenant"):
+        store.apply_event(event)

@@ -113,7 +113,7 @@ class SessionReadBarrier:
         target_seq: int | None = None,
     ) -> SessionReadResult:
         self.session_store._validate_session_id(session_id)
-        resolved_stream = stream_id or f"session:{session_id}"
+        resolved_stream = stream_id or self.session_store.stream_id_for_session(session_id)
         if self.session_store._session_id_from_stream(resolved_stream) != session_id:
             raise ValueError("stream_id does not match session_id")
         if target_seq is not None:
@@ -149,13 +149,16 @@ class SessionReadBarrier:
 class SessionStore:
     """Durable, synchronous projection of one session's working state."""
 
-    def __init__(self, database, recent_limit: int = 50):
+    def __init__(self, database, recent_limit: int = 50, *, tenant_id: str | None = None):
         if not isinstance(recent_limit, int) or isinstance(recent_limit, bool):
             raise TypeError("recent_limit must be an integer")
         if recent_limit < 1:
             raise ValueError("recent_limit must be positive")
+        if tenant_id is not None:
+            self._validate_namespace(tenant_id, "tenant_id")
         self.database = database
         self.recent_limit = recent_limit
+        self.tenant_id = tenant_id
         with self.database.begin() as connection:
             session_states_table.create(connection, checkfirst=True)
 
@@ -163,8 +166,9 @@ class SessionStore:
         if not isinstance(event, Event):
             raise TypeError("event must be an Event")
         session_id = self._session_id_from_stream(event.stream_id)
+        storage_session_id = self._storage_session_id(session_id)
         with self.database.begin() as connection:
-            state = self._read(connection, session_id)
+            state = self._read(connection, storage_session_id, session_id)
             if event.seq <= state.last_seq:
                 return state
             if event.seq != state.last_seq + 1:
@@ -192,8 +196,9 @@ class SessionStore:
 
     def get(self, session_id: str) -> SessionState:
         self._validate_session_id(session_id)
+        storage_session_id = self._storage_session_id(session_id)
         with self.database.read() as connection:
-            return self._read(connection, session_id)
+            return self._read(connection, storage_session_id, session_id)
 
     def upsert_active(self, memory: MemoryRecord) -> None:
         if not isinstance(memory, MemoryRecord):
@@ -203,8 +208,9 @@ class SessionStore:
         if memory.scope_id.strip() == "":
             raise ValueError("memory scope_id must not be blank")
         session_id = memory.scope_id
+        storage_session_id = self._storage_session_id(session_id)
         with self.database.begin() as connection:
-            state = self._read(connection, session_id)
+            state = self._read(connection, storage_session_id, session_id)
             if memory.source_seq > state.last_seq:
                 raise ValueError(
                     "memory source_seq must not exceed the session watermark; "
@@ -241,8 +247,9 @@ class SessionStore:
             raise ValueError("source_event_id must not be blank")
 
         session_id = operation.scope_id
+        storage_session_id = self._storage_session_id(session_id)
         with self.database.begin() as connection:
-            state = self._read(connection, session_id)
+            state = self._read(connection, storage_session_id, session_id)
             if source_seq > state.last_seq:
                 raise ValueError(
                     "source_seq must not exceed the session watermark; apply the source event first"
@@ -422,21 +429,25 @@ class SessionStore:
         return None
 
     @staticmethod
-    def _read(connection, session_id: str) -> SessionState:
+    def _read(
+        connection, storage_session_id: str, logical_session_id: str
+    ) -> SessionState:
         row = connection.execute(
-            select(session_states_table).where(session_states_table.c.session_id == session_id)
+            select(session_states_table).where(
+                session_states_table.c.session_id == storage_session_id
+            )
         ).mappings().first()
         if row is None:
-            return SessionState(session_id=session_id)
+            return SessionState(session_id=logical_session_id)
         return SessionState(
-            session_id=session_id,
+            session_id=logical_session_id,
             last_seq=int(row["last_seq"]),
             recent_messages=json.loads(row["recent_messages_json"]),
             active_memories=[MemoryRecord.model_validate(item) for item in json.loads(row["active_memories_json"])],
         )
 
-    @staticmethod
-    def _write(connection, state: SessionState) -> None:
+    def _write(self, connection, state: SessionState) -> None:
+        storage_session_id = self._storage_session_id(state.session_id)
         values = {
             "last_seq": state.last_seq,
             "recent_messages_json": json.dumps(state.recent_messages, sort_keys=True),
@@ -447,15 +458,19 @@ class SessionStore:
         }
         exists = connection.execute(
             select(session_states_table.c.session_id).where(
-                session_states_table.c.session_id == state.session_id
+                session_states_table.c.session_id == storage_session_id
             )
         ).scalar_one_or_none()
         if exists is None:
-            connection.execute(session_states_table.insert().values(session_id=state.session_id, **values))
+            connection.execute(
+                session_states_table.insert().values(
+                    session_id=storage_session_id, **values
+                )
+            )
         else:
             connection.execute(
                 update(session_states_table)
-                .where(session_states_table.c.session_id == state.session_id)
+                .where(session_states_table.c.session_id == storage_session_id)
                 .values(**values)
             )
 
@@ -466,15 +481,42 @@ class SessionStore:
         if not session_id.strip():
             raise ValueError("session_id must not be blank")
 
-    @staticmethod
-    def _session_id_from_stream(stream_id: str) -> str:
+    def _session_id_from_stream(self, stream_id: str) -> str:
+        if not isinstance(stream_id, str):
+            raise TypeError("stream_id must be a string")
+        if not stream_id.strip():
+            raise ValueError("stream_id must not be blank")
         marker = "session:"
-        if marker in stream_id:
+        if self.tenant_id is not None:
+            prefix = f"tenant:{self.tenant_id}:session:"
+            if not stream_id.startswith(prefix):
+                raise ValueError("stream_id does not match configured tenant")
+            session_id = stream_id[len(prefix) :]
+        elif marker in stream_id:
             session_id = stream_id.rsplit(marker, 1)[1]
         else:
             session_id = stream_id
-        SessionStore._validate_session_id(session_id)
+        self._validate_session_id(session_id)
         return session_id
+
+    def stream_id_for_session(self, session_id: str) -> str:
+        self._validate_session_id(session_id)
+        if self.tenant_id is None:
+            return f"session:{session_id}"
+        return f"tenant:{self.tenant_id}:session:{session_id}"
+
+    def _storage_session_id(self, session_id: str) -> str:
+        self._validate_session_id(session_id)
+        if self.tenant_id is None:
+            return session_id
+        return f"{self.tenant_id}:session:{session_id}"
+
+    @staticmethod
+    def _validate_namespace(value: str, name: str) -> None:
+        if not isinstance(value, str):
+            raise TypeError(f"{name} must be a string")
+        if not value.strip() or ":" in value:
+            raise ValueError(f"{name} must be non-empty and must not contain ':'")
 
 
 class SessionCommandCoordinator:

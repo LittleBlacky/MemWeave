@@ -145,7 +145,7 @@ docs/superpowers/logs/
 - Test: `tests/test_session_consistency.py`
 
 **Interfaces:**
-- `SessionStore.apply_event(event: Event) -> SessionState`; `get(session_id) -> SessionState`; `upsert_active(memory) -> None`. SessionStore 默认只接受连续事件水位；缺口由 ProjectionDispatcher/ProjectionRuntime 缓冲和恢复。
+- `SessionStore(database, ..., tenant_id=None)` exposes `apply_event(event: Event) -> SessionState`, `get(session_id) -> SessionState`, and `upsert_active(memory) -> None`. A tenant-scoped instance requires `tenant:<tenant_id>:session:<session_id>` streams and stores an isolated namespace; SessionStore still accepts only continuous event watermarks, with gaps handled by ProjectionDispatcher/ProjectionRuntime.
 - `SessionCommandCoordinator.append_explicit(operation, *, stream_id, actor, request_id, ...) -> SessionCommandResult`; EventStore 先提交 `memory.command`，再同步投影到 SessionStore。
 - `SessionProjectionBackend` adapts SessionStore to the Task 2 `EventProjector` contract; `SessionReadBarrier.read(...) -> SessionReadResult` depends only on the `ProjectionCatchup` contract (`target_seq`/`catch_up`), catches up a lagging session, and reports `requested_seq`, `applied_seq`, `lagging`, and `degraded` metadata.
 - `ExplicitOperationParser.parse(text, context: ParseContext) -> list[MemoryOperation]`.
