@@ -128,6 +128,41 @@ def test_stale_explicit_update_does_not_overwrite_session_memory(tmp_path):
     assert store.get("s1").active_memories[0].value == "PyCharm"
 
 
+def test_stale_explicit_forget_does_not_delete_newer_session_memory(tmp_path):
+    store = SessionStore(Database(str(tmp_path / "memory.db")))
+    first_event = project_event(store, 1)
+    store.apply_operation(
+        operation(OperationType.REMEMBER, key="editor", value="VS Code"),
+        source_seq=1,
+        source_event_id=first_event.event_id,
+    )
+    second_event = project_event(store, 2)
+    store.apply_operation(
+        operation(
+            OperationType.UPDATE,
+            key="editor",
+            value="PyCharm",
+            expected_version=1,
+        ),
+        source_seq=2,
+        source_event_id=second_event.event_id,
+    )
+
+    third_event = project_event(store, 3)
+    with pytest.raises(StaleWriteError):
+        store.apply_operation(
+            operation(
+                OperationType.FORGET,
+                key="editor",
+                expected_version=1,
+            ),
+            source_seq=3,
+            source_event_id=third_event.event_id,
+        )
+
+    assert store.get("s1").active_memories[0].value == "PyCharm"
+
+
 def test_duplicate_explicit_operation_is_idempotent(tmp_path):
     store = SessionStore(Database(str(tmp_path / "memory.db")))
     first_event = project_event(store, 1)

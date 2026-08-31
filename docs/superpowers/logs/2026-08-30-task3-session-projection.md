@@ -204,3 +204,14 @@ TDD 验证：Task 3 相关存储、会话协调器、读屏障测试 61 passed�
   EventStore 时出现不同的序列化语义。
 
 TDD 验证：会话操作、协调器和读屏障测试 21 passed。
+
+## FORGET 的版本校验
+
+日期：2026-08-31
+
+- 修复显式 `FORGET` 忽略 `expected_version` 的问题；当删除命令携带版本时，必须
+  与当前 session memory 版本匹配，否则抛出 `StaleWriteError`；
+- 未携带版本的删除仍保持幂等兼容行为，删除不存在的记忆不会制造新状态；
+- 防止延迟或并发的旧删除命令覆盖较新的 UPDATE。
+
+TDD 验证：新增 stale FORGET 回归测试；会话操作与协调器测试 18 passed。

@@ -354,6 +354,13 @@ class SessionStore:
         if operation.operation is OperationType.FORGET:
             if existing is None or source_seq < existing.source_seq:
                 return False
+            if (
+                operation.expected_version is not None
+                and existing.version != operation.expected_version
+            ):
+                raise StaleWriteError(
+                    f"expected session version {operation.expected_version}, got {existing.version}"
+                )
             if source_seq == existing.source_seq and source_event_id_value not in existing.source.event_ids:
                 raise StaleWriteError(
                     f"conflicting session forget for key {operation.key!r} at source_seq {source_seq}"
