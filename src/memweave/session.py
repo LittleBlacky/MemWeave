@@ -2,7 +2,7 @@
 
 import json
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Protocol
 from uuid import UUID
 
 from sqlalchemy import Column, Integer, MetaData, String, Table, Text, select, update
@@ -84,14 +84,24 @@ class SessionProjectionBackend:
         return self.session_store.get(session_id).last_seq
 
 
+class ProjectionCatchup(Protocol):
+    """Minimal contract required by SessionReadBarrier."""
+
+    def target_seq(self, stream_id: str) -> int:
+        ...
+
+    def catch_up(self, stream_id: str, target_seq: int) -> int:
+        ...
+
+
 class SessionReadBarrier:
     """Recover a lagging session projection before returning a read result."""
 
-    def __init__(self, session_store: "SessionStore", runtime):
+    def __init__(self, session_store: "SessionStore", runtime: ProjectionCatchup):
         if not isinstance(session_store, SessionStore):
             raise TypeError("session_store must be a SessionStore")
-        if not hasattr(runtime, "recover") or not hasattr(runtime, "event_source"):
-            raise TypeError("runtime must provide recover() and event_source")
+        if not hasattr(runtime, "catch_up") or not hasattr(runtime, "target_seq"):
+            raise TypeError("runtime must provide catch_up() and target_seq()")
         self.session_store = session_store
         self.runtime = runtime
 
@@ -114,14 +124,14 @@ class SessionReadBarrier:
         requested_seq = (
             target_seq
             if target_seq is not None
-            else self.runtime.event_source.last_seq(resolved_stream)
+            else self.runtime.target_seq(resolved_stream)
         )
         state = self.session_store.get(session_id)
         degraded = False
         error = None
         if state.last_seq < requested_seq:
             try:
-                self.runtime.recover(resolved_stream)
+                self.runtime.catch_up(resolved_stream, requested_seq)
             except Exception as exc:
                 degraded = True
                 error = str(exc)

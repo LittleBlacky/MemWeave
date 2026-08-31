@@ -127,3 +127,16 @@ TDD 验证：Task 3 相关测试 15 passed。
 
 TDD 验证：新增 `tests/test_session_read_barrier.py`，覆盖 Dispatcher 缺口缓存、读取
 自动恢复和恢复无法覆盖目标时的降级标记。
+
+## Runtime 解耦与异步边界
+
+日期：2026-08-31
+
+- `SessionReadBarrier` 不再访问具体 Runtime 的 `event_source` 或 `recover()`，只依赖
+  `ProjectionCatchup.target_seq()` / `catch_up()` 协议；
+- `ProjectionRuntime` 实现该协议，保留 Task 2 的 stream 缓冲、checkpoint 和重放能力；
+- `SessionProjectionBackend` 继续作为轻量适配器注册到 Dispatcher；
+- 长期记忆提取不新增第二套事件投影队列，后续使用现有 Outbox/Worker 的独立 topic，
+  与同步会话投影分离。
+
+TDD 验证：`tests/test_session_read_barrier.py` 与 `tests/test_recovery.py` 共 17 passed。

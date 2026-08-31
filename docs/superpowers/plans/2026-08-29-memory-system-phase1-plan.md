@@ -147,7 +147,7 @@ docs/superpowers/logs/
 **Interfaces:**
 - `SessionStore.apply_event(event: Event) -> SessionState`; `get(session_id) -> SessionState`; `upsert_active(memory) -> None`. SessionStore 默认只接受连续事件水位；缺口由 ProjectionDispatcher/ProjectionRuntime 缓冲和恢复。
 - `SessionCommandCoordinator.append_explicit(operation, *, stream_id, actor, request_id, ...) -> SessionCommandResult`; EventStore 先提交 `memory.command`，再同步投影到 SessionStore。
-- `SessionProjectionBackend` adapts SessionStore to the Task 2 `EventProjector` contract; `SessionReadBarrier.read(...) -> SessionReadResult` catches up a lagging session and reports `requested_seq`, `applied_seq`, `lagging`, and `degraded` metadata.
+- `SessionProjectionBackend` adapts SessionStore to the Task 2 `EventProjector` contract; `SessionReadBarrier.read(...) -> SessionReadResult` depends only on the `ProjectionCatchup` contract (`target_seq`/`catch_up`), catches up a lagging session, and reports `requested_seq`, `applied_seq`, `lagging`, and `degraded` metadata.
 - `ExplicitOperationParser.parse(text, context: ParseContext) -> list[MemoryOperation]`.
 - `ParseContext` contains server-injected tenant/user/session/project and current source sequence.
 

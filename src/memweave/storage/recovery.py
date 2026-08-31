@@ -51,6 +51,25 @@ class ProjectionRuntime:
         with self._stream_lock(stream_id):
             return self._states.get(stream_id, ProjectionRuntimeState.RECOVERING)
 
+    def target_seq(self, stream_id: str) -> int:
+        """Return the latest authoritative event sequence for a stream."""
+        self._validate_stream_id(stream_id)
+        return self.event_source.last_seq(stream_id)
+
+    def catch_up(self, stream_id: str, target_seq: int) -> int:
+        """Replay the stream until the requested target is covered."""
+        self._validate_stream_id(stream_id)
+        if not isinstance(target_seq, int) or isinstance(target_seq, bool):
+            raise TypeError("target_seq must be an integer")
+        if target_seq < 0:
+            raise ValueError("target_seq must not be negative")
+        applied = self.recover(stream_id)
+        if applied < target_seq:
+            raise RuntimeError(
+                f"projection catch-up stopped at {applied}, target is {target_seq}"
+            )
+        return applied
+
     def recover(self, stream_id: str) -> int:
         self._validate_stream_id(stream_id)
         lock = self._stream_lock(stream_id)

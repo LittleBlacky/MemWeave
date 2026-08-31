@@ -117,3 +117,31 @@ def test_read_barrier_reports_lag_when_recovery_cannot_cover_target(tmp_path):
     assert result.lagging is True
     assert result.degraded is True
     assert result.error
+
+
+def test_read_barrier_depends_on_catchup_contract_not_runtime_internals(tmp_path):
+    database = Database(str(tmp_path / "memory.db"))
+    event_store = EventStore(database)
+    events = append_messages(event_store, 3)
+    sessions = SessionStore(database)
+    sessions.apply_event(events[0])
+    sessions.apply_event(events[1])
+
+    class FakeCatchup:
+        def __init__(self):
+            self.calls = []
+
+        def target_seq(self, stream_id):
+            return 3
+
+        def catch_up(self, stream_id, target_seq):
+            self.calls.append((stream_id, target_seq))
+            sessions.apply_event(events[2])
+            return 3
+
+    catchup = FakeCatchup()
+    result = SessionReadBarrier(sessions, catchup).read("s1")
+
+    assert catchup.calls == [("session:s1", 3)]
+    assert result.applied_seq == 3
+    assert result.lagging is False
