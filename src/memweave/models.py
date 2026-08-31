@@ -133,8 +133,6 @@ class MemoryOperation(BaseModel):
 
     @model_validator(mode="after")
     def validate_operation_requirements(self) -> "MemoryOperation":
-        if self.operation is OperationType.UPDATE and self.expected_version is None:
-            raise ValueError("UPDATE requires expected_version")
         if self.operation is OperationType.FORGET and self.memory_id is None and self.key is None:
             raise ValueError("FORGET requires memory_id or key")
         if self.operation in (OperationType.REMEMBER, OperationType.UPDATE) and self.key is None:

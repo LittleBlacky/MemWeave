@@ -350,10 +350,17 @@ class SessionStore:
                 )
 
         if operation.operation is OperationType.UPDATE:
-            if existing is None or existing.version != operation.expected_version:
+            if existing is None:
                 actual = existing.version if existing is not None else None
                 raise StaleWriteError(
                     f"expected session version {operation.expected_version}, got {actual}"
+                )
+            if (
+                operation.expected_version is not None
+                and existing.version != operation.expected_version
+            ):
+                raise StaleWriteError(
+                    f"expected session version {operation.expected_version}, got {existing.version}"
                 )
             version = existing.version + 1
             created_at = existing.created_at

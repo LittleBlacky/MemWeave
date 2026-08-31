@@ -140,3 +140,16 @@ TDD 验证：新增 `tests/test_session_read_barrier.py`，覆盖 Dispatcher 缺
   与同步会话投影分离。
 
 TDD 验证：`tests/test_session_read_barrier.py` 与 `tests/test_recovery.py` 共 17 passed。
+
+## UPDATE 版本来源
+
+日期：2026-08-31
+
+- Parser 不再把 `UPDATE` 的 `expected_version` 固定为 1；缺省值表示由执行事务
+  读取当前 session 版本；
+- SessionStore 在事务内绑定当前版本并递增，连续多次自然更新不再误报版本冲突；
+- 调用方显式提供 `expected_version` 时仍执行严格 CAS，旧版本继续抛出
+  `StaleWriteError`；
+- `MemoryOperation` 允许 UPDATE 缺省版本，保留执行层的版本解析职责。
+
+TDD 验证：新增 Parser 连续两次 UPDATE 测试，Task 3 相关测试 21 passed。

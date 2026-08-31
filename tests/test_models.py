@@ -54,16 +54,17 @@ def test_memory_record_rejects_confidence_outside_zero_to_one():
         )
 
 
-def test_update_requires_expected_version():
-    with pytest.raises(ValidationError):
-        MemoryOperation(
-            operation=OperationType.UPDATE,
-            kind=MemoryKind.FACT,
-            scope=MemoryScope.PROJECT,
-            scope_id="project-1",
-            key="database.engine",
-            value="PostgreSQL",
-        )
+def test_update_allows_execution_time_version_resolution():
+    operation = MemoryOperation(
+        operation=OperationType.UPDATE,
+        kind=MemoryKind.FACT,
+        scope=MemoryScope.PROJECT,
+        scope_id="project-1",
+        key="database.engine",
+        value="PostgreSQL",
+    )
+
+    assert operation.expected_version is None
 
 
 def test_forget_requires_memory_id_or_key():

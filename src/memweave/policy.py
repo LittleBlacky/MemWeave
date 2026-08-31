@@ -95,13 +95,11 @@ class ExplicitOperationParser:
             assignment = self._ASSIGNMENT.match(match.group("body"))
             if not assignment:
                 return []
-            expected_version = 1 if rule.spec.operation is OperationType.UPDATE else None
             return [MemoryOperation(
                 operation=rule.spec.operation,
                 scope=MemoryScope.SESSION,
                 scope_id=context.session_id,
                 key=assignment.group("key"),
                 value=assignment.group("value"),
-                expected_version=expected_version,
             )]
         return []

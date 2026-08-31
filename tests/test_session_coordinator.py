@@ -5,6 +5,7 @@ import pytest
 from memweave.db import Database
 from memweave.events import EventStore
 from memweave.models import EventType, MemoryOperation, MemoryScope, OperationType
+from memweave.policy import ExplicitOperationParser, ParseContext
 from memweave.session import SessionCommandCoordinator, SessionStore
 
 
@@ -184,3 +185,40 @@ def test_contiguous_session_projection_rejects_event_sequence_gap(tmp_path):
     assert recovered.last_seq == 2
     recovered = sessions.apply_event(third)
     assert recovered.last_seq == 3
+
+
+def test_parser_updates_bind_the_current_session_version_at_execution(tmp_path):
+    database = Database(str(tmp_path / "memory.db"))
+    events = EventStore(database)
+    sessions = SessionStore(database)
+    coordinator = SessionCommandCoordinator(events, sessions)
+    parser = ExplicitOperationParser()
+
+    coordinator.append_explicit(
+        remember(key="editor", value="VS Code"),
+        stream_id="session:s1",
+        actor="user:u1",
+        request_id=uuid4(),
+    )
+    context = ParseContext("t1", "u1", "s1", None, 1)
+    first_update = parser.parse("更新 editor = PyCharm", context)[0]
+    assert first_update.expected_version is None
+    coordinator.append_explicit(
+        first_update,
+        stream_id="session:s1",
+        actor="user:u1",
+        request_id=uuid4(),
+    )
+
+    second_update = parser.parse("更新 editor = Vim", context)[0]
+    assert second_update.expected_version is None
+    result = coordinator.append_explicit(
+        second_update,
+        stream_id="session:s1",
+        actor="user:u1",
+        request_id=uuid4(),
+    )
+
+    memory = result.state.active_memories[0]
+    assert memory.value == "Vim"
+    assert memory.version == 3
