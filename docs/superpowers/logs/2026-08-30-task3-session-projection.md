@@ -106,10 +106,9 @@ TDD 验证：Task 3 相关测试 15 passed。
 
 日期：2026-08-31
 
-- `SessionStore` 默认启用 `enforce_contiguous=True`，只接受
-  `last_seq + 1` 的下一个事件；
+- `SessionStore` 只接受 `last_seq + 1` 的下一个事件，不再提供宽松模式开关；
 - 缺口事件不得推进 session watermark，也不得写入最近事件或活动记忆；
 - 乱序缓存和恢复职责明确归属 `ProjectionDispatcher/ProjectionRuntime`，
   SessionStore 不再作为缺口缓存；
-- `enforce_contiguous=False` 仅作为显式旧适配器迁移开关保留，不属于 Task 3
-  的标准生产路径；新代码不得依赖该模式。
+- 乱序旧适配器必须迁移到 `ProjectionDispatcher/ProjectionRuntime`，不能绕过严格
+  SessionStore 契约。

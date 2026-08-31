@@ -51,22 +51,13 @@ class SessionCommandResult:
 class SessionStore:
     """Durable, synchronous projection of one session's working state."""
 
-    def __init__(
-        self,
-        database,
-        recent_limit: int = 50,
-        *,
-        enforce_contiguous: bool = True,
-    ):
+    def __init__(self, database, recent_limit: int = 50):
         if not isinstance(recent_limit, int) or isinstance(recent_limit, bool):
             raise TypeError("recent_limit must be an integer")
         if recent_limit < 1:
             raise ValueError("recent_limit must be positive")
-        if not isinstance(enforce_contiguous, bool):
-            raise TypeError("enforce_contiguous must be a boolean")
         self.database = database
         self.recent_limit = recent_limit
-        self.enforce_contiguous = enforce_contiguous
         with self.database.begin() as connection:
             session_states_table.create(connection, checkfirst=True)
 
@@ -78,7 +69,7 @@ class SessionStore:
             state = self._read(connection, session_id)
             if event.seq <= state.last_seq:
                 return state
-            if self.enforce_contiguous and event.seq != state.last_seq + 1:
+            if event.seq != state.last_seq + 1:
                 raise ValueError(
                     "session event sequence gap: "
                     f"expected {state.last_seq + 1}, got {event.seq}"
