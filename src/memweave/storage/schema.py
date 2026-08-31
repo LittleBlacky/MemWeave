@@ -46,6 +46,15 @@ projection_watermarks_table = Table(
     UniqueConstraint("projection", "stream_id", name="pk_projection_watermarks"),
 )
 
+session_states_table = Table(
+    "session_states",
+    metadata,
+    Column("session_id", String(255), primary_key=True),
+    Column("last_seq", Integer, nullable=False),
+    Column("recent_messages_json", Text, nullable=False),
+    Column("active_memories_json", Text, nullable=False),
+)
+
 schema_migrations_table = Table(
     "schema_migrations",
     metadata,

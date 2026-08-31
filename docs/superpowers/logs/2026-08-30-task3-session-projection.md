@@ -179,3 +179,16 @@ TDD 验证：新增直接 upsert 的水位、重复和冲突测试，Task 3 相�
   生产路径必须显式配置 tenant_id。
 
 TDD 验证：新增同名 session 的双租户隔离和 foreign stream 拒绝测试。
+
+## 纳入版本化 schema migration
+
+日期：2026-08-31
+
+- 将 `session_states` 表定义统一移动到 `storage.schema`，避免 SessionStore 持有第二份
+  表元数据；
+- 新增 `0004_session_states` migration，数据库初始化统一创建会话投影表；
+- 移除 SessionStore 初始化时的隐式建表，旧数据库中已存在的表由 migration 的
+  `checkfirst` 安全接管，不修改既有数据；
+- 更新 migration discovery/应用测试，保证新库和并发启动仍保持幂等。
+
+TDD 验证：Task 3 相关存储、会话协调器、读屏障测试 61 passed。

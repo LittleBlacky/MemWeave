@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol
 from uuid import UUID
 
-from sqlalchemy import Column, Integer, MetaData, String, Table, Text, select, update
+from sqlalchemy import select, update
 
 from .errors import StaleWriteError
 from .models import (
@@ -19,17 +19,7 @@ from .models import (
     MemoryStatus,
     OperationType,
 )
-
-
-_metadata = MetaData()
-session_states_table = Table(
-    "session_states",
-    _metadata,
-    Column("session_id", String(255), primary_key=True),
-    Column("last_seq", Integer, nullable=False),
-    Column("recent_messages_json", Text, nullable=False),
-    Column("active_memories_json", Text, nullable=False),
-)
+from .storage.schema import session_states_table
 
 
 @dataclass
@@ -159,8 +149,6 @@ class SessionStore:
         self.database = database
         self.recent_limit = recent_limit
         self.tenant_id = tenant_id
-        with self.database.begin() as connection:
-            session_states_table.create(connection, checkfirst=True)
 
     def apply_event(self, event: Event) -> SessionState:
         if not isinstance(event, Event):
