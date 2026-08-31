@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from uuid import uuid4
 
 import pytest
@@ -214,6 +215,28 @@ def test_session_store_namespaces_state_by_tenant(tmp_path):
 
     assert tenant_a.get("s1").recent_messages[0]["payload"]["text"] == "A"
     assert tenant_b.get("s1").recent_messages[0]["payload"]["text"] == "B"
+
+
+def test_session_projection_normalizes_json_payload_at_write_boundary(tmp_path):
+    database = Database(str(tmp_path / "memory.db"))
+    store = SessionStore(database)
+    event_id = uuid4()
+    occurred = datetime(2026, 8, 31, tzinfo=timezone.utc)
+    event = Event(
+        event_id=event_id,
+        event_type=EventType.USER_MESSAGE,
+        stream_id="session:s1",
+        seq=1,
+        actor="user:a",
+        payload={"event_id": event_id, "occurred_at": occurred},
+    )
+
+    state = store.apply_event(event)
+    assert state.recent_messages[0]["payload"] == {
+        "event_id": str(event_id),
+        "occurred_at": str(occurred),
+    }
+    assert store.get("s1").recent_messages == state.recent_messages
 
 
 def test_tenant_session_store_rejects_foreign_stream_id(tmp_path):

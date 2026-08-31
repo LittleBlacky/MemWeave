@@ -2,6 +2,7 @@
 
 import json
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any, Protocol
 from uuid import UUID
 
@@ -20,6 +21,25 @@ from .models import (
     OperationType,
 )
 from .storage.schema import session_states_table
+
+
+def _json_default(value: Any) -> str:
+    if isinstance(value, (UUID, datetime)):
+        return str(value)
+    raise TypeError("session projection contains a non-serializable value")
+
+
+def _json_safe(value: Any) -> Any:
+    """Normalize a value through the session snapshot JSON boundary."""
+
+    return json.loads(
+        json.dumps(
+            value,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=_json_default,
+        )
+    )
 
 
 @dataclass
@@ -263,13 +283,14 @@ class SessionStore:
         } or event.event_type.startswith("turn.")
 
     def _append_recent_event(self, state: SessionState, event: Event) -> None:
+        payload = _json_safe(event.payload)
         state.recent_messages.append(
             {
                 "event_id": str(event.event_id),
                 "seq": event.seq,
                 "event_type": event.event_type,
                 "actor": event.actor,
-                "payload": event.payload,
+                "payload": payload,
             }
         )
         state.recent_messages = state.recent_messages[-self.recent_limit :]

@@ -192,3 +192,15 @@ TDD 验证：新增同名 session 的双租户隔离和 foreign stream 拒绝测
 - 更新 migration discovery/应用测试，保证新库和并发启动仍保持幂等。
 
 TDD 验证：Task 3 相关存储、会话协调器、读屏障测试 61 passed。
+
+## 会话快照 JSON 边界
+
+日期：2026-08-31
+
+- 最近事件 payload 在进入 `SessionState` 前经过确定性的 JSON round-trip，UUID 和
+  datetime 等与 EventStore 相同的可序列化值统一转换为字符串；
+- 不可序列化值在本地事务提交前失败，不会留下半更新的 session snapshot；
+- 重启后读取的 recent message 与本次投影返回值保持一致，避免直接投影适配器绕过
+  EventStore 时出现不同的序列化语义。
+
+TDD 验证：会话操作、协调器和读屏障测试 21 passed。
