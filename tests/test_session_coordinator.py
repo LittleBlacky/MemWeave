@@ -1,3 +1,5 @@
+from concurrent.futures import ThreadPoolExecutor
+from threading import Event as ThreadEvent, Lock
 from uuid import uuid4
 
 import pytest
@@ -222,3 +224,49 @@ def test_parser_updates_bind_the_current_session_version_at_execution(tmp_path):
     memory = result.state.active_memories[0]
     assert memory.value == "Vim"
     assert memory.version == 3
+
+
+def test_concurrent_commands_for_one_session_are_serialized(tmp_path):
+    database = Database(str(tmp_path / "memory.db"))
+    events = EventStore(database)
+    sessions = SessionStore(database)
+    coordinator = SessionCommandCoordinator(events, sessions)
+    original_apply_event = sessions.apply_event
+    first_projection_entered = ThreadEvent()
+    release_first_projection = ThreadEvent()
+    calls_lock = Lock()
+    calls = 0
+
+    def delayed_apply(event):
+        nonlocal calls
+        with calls_lock:
+            calls += 1
+            call_number = calls
+        if call_number == 1:
+            first_projection_entered.set()
+            assert release_first_projection.wait(timeout=5)
+        return original_apply_event(event)
+
+    sessions.apply_event = delayed_apply
+
+    def submit(value):
+        return coordinator.append_explicit(
+            remember(key=f"key-{value}", value=value),
+            stream_id="session:s1",
+            actor="user:u1",
+            request_id=uuid4(),
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first = executor.submit(submit, "first")
+        assert first_projection_entered.wait(timeout=5)
+        second = executor.submit(submit, "second")
+        assert not second.done()
+        release_first_projection.set()
+        first_result = first.result(timeout=5)
+        second_result = second.result(timeout=5)
+
+    assert {first_result.event.seq, second_result.event.seq} == {1, 2}
+    state = sessions.get("s1")
+    assert state.last_seq == 2
+    assert {memory.value for memory in state.active_memories} == {"first", "second"}

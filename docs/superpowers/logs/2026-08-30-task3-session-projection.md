@@ -215,3 +215,17 @@ TDD 验证：会话操作、协调器和读屏障测试 21 passed。
 - 防止延迟或并发的旧删除命令覆盖较新的 UPDATE。
 
 TDD 验证：新增 stale FORGET 回归测试；会话操作与协调器测试 18 passed。
+
+## 同一 session 并发显式命令串行化
+
+日期：2026-08-31
+
+- 修复 Coordinator 直接并发调用 `SessionStore.apply_event()` 导致的竞态：seq=2
+  可能在 seq=1 投影完成前先执行并收到 sequence gap；
+- `SessionStore` 提供按规范 session stream 归一化的 `command_lock()`，由
+  `SessionCommandCoordinator` 包住 EventStore append 与 SessionStore apply；
+- 锁归属 SessionStore，因此共享同一投影实例的多个 Coordinator 也能复用同一把锁；
+- 该锁解决单进程内的并发排序，跨进程仍需由持久化 ProjectionRuntime/队列保证顺序，
+  不宣称分布式 exactly-once。
+
+TDD 验证：新增同一 session 双线程显式命令测试；Task 3 会话相关测试 23 passed。

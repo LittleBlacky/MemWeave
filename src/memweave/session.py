@@ -1,10 +1,13 @@
 """Synchronous session projection for current working memory."""
 
 import json
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
+from threading import Lock, RLock
 from typing import Any, Protocol
 from uuid import UUID
+from weakref import WeakValueDictionary
 
 from sqlalchemy import select, update
 
@@ -169,6 +172,28 @@ class SessionStore:
         self.database = database
         self.recent_limit = recent_limit
         self.tenant_id = tenant_id
+        self._command_locks: WeakValueDictionary[str, RLock] = WeakValueDictionary()
+        self._command_locks_guard = Lock()
+
+    @contextmanager
+    def command_lock(self, stream_id: str):
+        """Serialize append-and-project commands for one logical session.
+
+        The lock is owned by the SessionStore so multiple coordinators sharing
+        one projection instance cannot append the next event before the prior
+        event has been projected. Durable cross-process ordering remains the
+        responsibility of the event/projection runtime.
+        """
+
+        session_id = self._session_id_from_stream(stream_id)
+        key = self._storage_session_id(session_id)
+        with self._command_locks_guard:
+            lock = self._command_locks.get(key)
+            if lock is None:
+                lock = RLock()
+                self._command_locks[key] = lock
+        with lock:
+            yield
 
     def apply_event(self, event: Event) -> SessionState:
         if not isinstance(event, Event):
@@ -567,17 +592,18 @@ class SessionCommandCoordinator:
         if operation.scope_id != event_session_id:
             raise ValueError("operation scope_id does not match stream session")
 
-        event = self.event_store.append(
-            stream_id=stream_id,
-            event_type=EventType.MEMORY_COMMAND,
-            payload={"operation": operation.model_dump(mode="json")},
-            actor=actor,
-            request_id=request_id,
-            event_id=event_id,
-            causation_id=causation_id,
-            correlation_id=correlation_id,
-            idempotency_key=idempotency_key,
-            protocol_version=protocol_version,
-        )
-        state = self.session_store.apply_event(event)
-        return SessionCommandResult(event=event, state=state)
+        with self.session_store.command_lock(stream_id):
+            event = self.event_store.append(
+                stream_id=stream_id,
+                event_type=EventType.MEMORY_COMMAND,
+                payload={"operation": operation.model_dump(mode="json")},
+                actor=actor,
+                request_id=request_id,
+                event_id=event_id,
+                causation_id=causation_id,
+                correlation_id=correlation_id,
+                idempotency_key=idempotency_key,
+                protocol_version=protocol_version,
+            )
+            state = self.session_store.apply_event(event)
+            return SessionCommandResult(event=event, state=state)
