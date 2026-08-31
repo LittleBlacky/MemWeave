@@ -205,6 +205,11 @@ class SessionStore:
         session_id = memory.scope_id
         with self.database.begin() as connection:
             state = self._read(connection, session_id)
+            if memory.source_seq > state.last_seq:
+                raise ValueError(
+                    "memory source_seq must not exceed the session watermark; "
+                    "apply the source event first"
+                )
             if self._upsert_memory_to_state(state, memory):
                 self._write(connection, state)
 
@@ -295,7 +300,15 @@ class SessionStore:
             if existing.source_seq > memory.source_seq:
                 return False
             if existing.source_seq == memory.source_seq:
-                if existing == memory:
+                if (
+                    existing.key == memory.key
+                    and existing.value == memory.value
+                    and existing.kind is memory.kind
+                    and existing.status is memory.status
+                    and set(existing.source.event_ids).intersection(
+                        memory.source.event_ids
+                    )
+                ):
                     return False
                 raise StaleWriteError(
                     f"conflicting session write for key {memory.key!r} at source_seq {memory.source_seq}"

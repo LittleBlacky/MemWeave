@@ -4,7 +4,17 @@ import pytest
 
 from memweave.db import Database
 from memweave.errors import StaleWriteError
-from memweave.models import Event, EventType, MemoryOperation, MemoryScope, OperationType
+from memweave.models import (
+    Event,
+    EventType,
+    MemoryKind,
+    MemoryOperation,
+    MemoryRecord,
+    MemoryScope,
+    MemorySource,
+    MemoryStatus,
+    OperationType,
+)
 from memweave.session import SessionStore
 
 
@@ -29,6 +39,21 @@ def project_event(store, seq):
     )
     store.apply_event(event)
     return event
+
+
+def record(*, event_id, key="language", value="Python", source_seq=1):
+    return MemoryRecord(
+        kind=MemoryKind.WORKING,
+        scope=MemoryScope.SESSION,
+        scope_id="s1",
+        key=key,
+        value=value,
+        status=MemoryStatus.SESSION_ONLY,
+        confidence=1.0,
+        source=MemorySource(type="explicit", event_ids=[str(event_id)]),
+        source_seq=source_seq,
+        version=1,
+    )
 
 
 def test_explicit_operations_update_session_memory_synchronously(tmp_path):
@@ -144,3 +169,22 @@ def test_low_level_operation_cannot_bypass_event_projection(tmp_path):
     state = store.get("s1")
     assert state.last_seq == 0
     assert state.active_memories == []
+
+
+def test_upsert_active_uses_event_watermark_and_conflict_rules(tmp_path):
+    store = SessionStore(Database(str(tmp_path / "memory.db")))
+    source_event = project_event(store, 1)
+    first = record(event_id=source_event.event_id)
+
+    store.upsert_active(first)
+    duplicate = record(event_id=source_event.event_id)
+    store.upsert_active(duplicate)
+    assert store.get("s1").active_memories == [first]
+
+    with pytest.raises(StaleWriteError):
+        store.upsert_active(
+            record(event_id=uuid4(), value="Rust", source_seq=1)
+        )
+
+    with pytest.raises(ValueError, match="session watermark"):
+        store.upsert_active(record(event_id=uuid4(), source_seq=2))

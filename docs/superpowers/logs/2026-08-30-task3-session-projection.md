@@ -153,3 +153,15 @@ TDD 验证：`tests/test_session_read_barrier.py` 与 `tests/test_recovery.py` �
 - `MemoryOperation` 允许 UPDATE 缺省版本，保留执行层的版本解析职责。
 
 TDD 验证：新增 Parser 连续两次 UPDATE 测试，Task 3 相关测试 21 passed。
+
+## 统一 Session 写入入口语义
+
+日期：2026-08-31
+
+- `upsert_active()` 与 `apply_operation()` 现在共享同一个内部状态变更函数；
+- 直接 upsert 同样要求 `source_seq <= session.last_seq`，不能绕过源事件投影；
+- 同一 key、同一 source_seq、同一来源事件且内容相同视为重复投递；
+- 同序号不同内容抛出 `StaleWriteError`，旧序号保持 no-op；
+- 保留 `upsert_active()` 兼容签名，但不再保留与操作入口不同的冲突语义。
+
+TDD 验证：新增直接 upsert 的水位、重复和冲突测试，Task 3 相关测试 22 passed。
