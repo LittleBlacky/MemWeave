@@ -112,3 +112,18 @@ TDD 验证：Task 3 相关测试 15 passed。
   SessionStore 不再作为缺口缓存；
 - 乱序旧适配器必须迁移到 `ProjectionDispatcher/ProjectionRuntime`，不能绕过严格
   SessionStore 契约。
+
+## 缺口恢复与读取屏障
+
+日期：2026-08-31
+
+- 新增 `SessionProjectionBackend`，将严格 SessionStore 接入 Task 2 的 Dispatcher；
+  Dispatcher 负责 pending gap，SessionStore 只应用连续事件；
+- 新增 `SessionReadBarrier` 和 `SessionReadResult`；读取发现 session 水位落后于
+  EventStore 目标水位时，主动调用 `ProjectionRuntime.recover()` 尝试补齐；
+- 恢复失败不把旧状态伪装成最新状态，结果带有 `lagging=True`、`degraded=True`
+  和错误信息，供 Adapter 决定重试或降级；
+- 正常恢复后返回 `requested_seq == applied_seq`，保证读取到的状态已追平目标事件。
+
+TDD 验证：新增 `tests/test_session_read_barrier.py`，覆盖 Dispatcher 缺口缓存、读取
+自动恢复和恢复无法覆盖目标时的降级标记。

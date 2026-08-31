@@ -48,6 +48,94 @@ class SessionCommandResult:
     state: SessionState
 
 
+@dataclass(frozen=True)
+class SessionReadResult:
+    """A session read together with the event watermark it represents."""
+
+    state: SessionState
+    requested_seq: int
+    applied_seq: int
+    lagging: bool
+    degraded: bool = False
+    error: str | None = None
+
+
+class SessionProjectionBackend:
+    """ProjectionBackend adapter for dispatching ordered events to SessionStore."""
+
+    def __init__(self, session_store: "SessionStore", name: str = "session"):
+        if not isinstance(session_store, SessionStore):
+            raise TypeError("session_store must be a SessionStore")
+        if not isinstance(name, str):
+            raise TypeError("name must be a string")
+        if not name.strip():
+            raise ValueError("name must not be blank")
+        self.session_store = session_store
+        self.name = name
+
+    def apply(self, event: Event) -> None:
+        self.session_store.apply_event(event)
+
+    def health(self) -> bool:
+        return True
+
+    def watermark(self, stream_id: str) -> int:
+        session_id = self.session_store._session_id_from_stream(stream_id)
+        return self.session_store.get(session_id).last_seq
+
+
+class SessionReadBarrier:
+    """Recover a lagging session projection before returning a read result."""
+
+    def __init__(self, session_store: "SessionStore", runtime):
+        if not isinstance(session_store, SessionStore):
+            raise TypeError("session_store must be a SessionStore")
+        if not hasattr(runtime, "recover") or not hasattr(runtime, "event_source"):
+            raise TypeError("runtime must provide recover() and event_source")
+        self.session_store = session_store
+        self.runtime = runtime
+
+    def read(
+        self,
+        session_id: str,
+        *,
+        stream_id: str | None = None,
+        target_seq: int | None = None,
+    ) -> SessionReadResult:
+        self.session_store._validate_session_id(session_id)
+        resolved_stream = stream_id or f"session:{session_id}"
+        if self.session_store._session_id_from_stream(resolved_stream) != session_id:
+            raise ValueError("stream_id does not match session_id")
+        if target_seq is not None:
+            if not isinstance(target_seq, int) or isinstance(target_seq, bool):
+                raise TypeError("target_seq must be an integer")
+            if target_seq < 0:
+                raise ValueError("target_seq must not be negative")
+        requested_seq = (
+            target_seq
+            if target_seq is not None
+            else self.runtime.event_source.last_seq(resolved_stream)
+        )
+        state = self.session_store.get(session_id)
+        degraded = False
+        error = None
+        if state.last_seq < requested_seq:
+            try:
+                self.runtime.recover(resolved_stream)
+            except Exception as exc:
+                degraded = True
+                error = str(exc)
+            state = self.session_store.get(session_id)
+        return SessionReadResult(
+            state=state,
+            requested_seq=requested_seq,
+            applied_seq=state.last_seq,
+            lagging=state.last_seq < requested_seq,
+            degraded=degraded,
+            error=error,
+        )
+
+
 class SessionStore:
     """Durable, synchronous projection of one session's working state."""
 

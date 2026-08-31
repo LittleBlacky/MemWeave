@@ -1,0 +1,119 @@
+from uuid import uuid4
+
+from memweave.db import Database
+from memweave.events import EventStore
+from memweave.models import EventType
+from memweave.session import (
+    SessionProjectionBackend,
+    SessionReadBarrier,
+    SessionStore,
+)
+from memweave.storage.checkpoints import RelationalProjectionCheckpointStore
+from memweave.storage.coordinator import ProjectionDispatcher
+from memweave.storage.recovery import ProjectionRuntime
+
+
+def append_messages(event_store, count):
+    return [
+        event_store.append(
+            stream_id="session:s1",
+            event_type=EventType.USER_MESSAGE,
+            payload={"text": f"message-{seq}"},
+            actor="user:u1",
+            request_id=uuid4(),
+        )
+        for seq in range(1, count + 1)
+    ]
+
+
+def make_runtime(database, session_store, event_store):
+    checkpoints = RelationalProjectionCheckpointStore(database)
+    dispatcher = ProjectionDispatcher(checkpoint_store=checkpoints)
+    dispatcher.register_backend(SessionProjectionBackend(session_store))
+    return ProjectionRuntime(dispatcher, event_store)
+
+
+def test_runtime_buffers_gap_and_applies_session_events_in_order(tmp_path):
+    database = Database(str(tmp_path / "memory.db"))
+    event_store = EventStore(database)
+    events = append_messages(event_store, 2)
+    sessions = SessionStore(database)
+    runtime = make_runtime(database, sessions, event_store)
+
+    runtime.recover("session:s1")
+    event_store.append(
+        stream_id="session:s1",
+        event_type=EventType.USER_MESSAGE,
+        payload={"text": "message-3"},
+        actor="user:u1",
+        request_id=uuid4(),
+    )
+    event4 = event_store.append(
+        stream_id="session:s1",
+        event_type=EventType.USER_MESSAGE,
+        payload={"text": "message-4"},
+        actor="user:u1",
+        request_id=uuid4(),
+    )
+
+    runtime.publish(event4)
+    assert sessions.get("s1").last_seq == 2
+
+    runtime.recover("session:s1")
+    state = sessions.get("s1")
+    assert state.last_seq == 4
+    assert [item["seq"] for item in state.recent_messages] == [1, 2, 3, 4]
+
+
+def test_read_barrier_recovers_lagging_session_before_returning(tmp_path):
+    database = Database(str(tmp_path / "memory.db"))
+    event_store = EventStore(database)
+    events = append_messages(event_store, 2)
+    sessions = SessionStore(database)
+    runtime = make_runtime(database, sessions, event_store)
+    runtime.recover("session:s1")
+
+    event3 = event_store.append(
+        stream_id="session:s1",
+        event_type=EventType.USER_MESSAGE,
+        payload={"text": "message-3"},
+        actor="user:u1",
+        request_id=uuid4(),
+    )
+    runtime.publish(event3)
+    barrier = SessionReadBarrier(sessions, runtime)
+
+    result = barrier.read("s1")
+
+    assert result.requested_seq == 3
+    assert result.applied_seq == 3
+    assert result.lagging is False
+    assert result.degraded is False
+    assert result.state.recent_messages[-1]["payload"]["text"] == "message-3"
+
+
+def test_read_barrier_reports_lag_when_recovery_cannot_cover_target(tmp_path):
+    database = Database(str(tmp_path / "memory.db"))
+    event_store = EventStore(database)
+    events = append_messages(event_store, 2)
+    sessions = SessionStore(database)
+    runtime = make_runtime(database, sessions, event_store)
+    runtime.recover("session:s1")
+
+    class MissingEventSource:
+        def last_seq(self, stream_id):
+            return 4
+
+        def list_after(self, stream_id, seq):
+            return [events[1]]
+
+    broken_runtime = ProjectionRuntime(runtime.dispatcher, MissingEventSource())
+    result = SessionReadBarrier(sessions, broken_runtime).read(
+        "s1", target_seq=4
+    )
+
+    assert result.applied_seq == 2
+    assert result.requested_seq == 4
+    assert result.lagging is True
+    assert result.degraded is True
+    assert result.error
