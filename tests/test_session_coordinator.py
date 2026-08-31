@@ -324,3 +324,20 @@ def test_fencing_token_rejects_projection_from_expired_owner(tmp_path):
             assert new_lease.fencing_token > old_lease.fencing_token
             with pytest.raises(RuntimeError, match="lease is no longer valid"):
                 first.apply_event(event, lease=old_lease)
+
+
+def test_lease_is_bound_to_tenant_storage_namespace(tmp_path):
+    database = Database(str(tmp_path / "memory.db"))
+    tenant_a = SessionStore(database, tenant_id="tenant-a")
+    tenant_b = SessionStore(database, tenant_id="tenant-b")
+    event = EventStore(database).append(
+        stream_id="tenant:tenant-a:session:s1",
+        event_type=EventType.USER_MESSAGE,
+        payload={"text": "hello"},
+        actor="user:u1",
+        request_id=uuid4(),
+    )
+
+    with tenant_b.command_lease("tenant:tenant-b:session:s1", owner_id="process-a") as lease:
+        with pytest.raises(ValueError, match="lease does not match"):
+            tenant_a.apply_event(event, lease=lease)

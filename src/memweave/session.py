@@ -8,7 +8,7 @@ import os
 import time
 from threading import Lock, RLock
 from typing import Any, Protocol
-from uuid import UUID
+from uuid import UUID, uuid4
 from weakref import WeakValueDictionary
 
 from sqlalchemy import insert, select, update
@@ -69,6 +69,7 @@ class SessionLease:
     session_id: str
     owner_id: str
     fencing_token: int
+    storage_session_id: str
 
 
 @dataclass(frozen=True)
@@ -266,7 +267,12 @@ class SessionStore:
                     else:
                         token = None
                     if token is not None:
-                        lease = SessionLease(session_id, owner_id, token)
+                        lease = SessionLease(
+                            session_id=session_id,
+                            owner_id=owner_id,
+                            fencing_token=token,
+                            storage_session_id=self._storage_session_id(session_id),
+                        )
             except (IntegrityError, OperationalError):
                 if time.monotonic() >= deadline:
                     raise TimeoutError(f"timed out acquiring session lease for {stream_id}")
@@ -291,9 +297,12 @@ class SessionStore:
         if not isinstance(event, Event):
             raise TypeError("event must be an Event")
         session_id = self._session_id_from_stream(event.stream_id)
-        if lease is not None and lease.session_id != session_id:
-            raise ValueError("lease does not match event session")
         storage_session_id = self._storage_session_id(session_id)
+        if lease is not None and (
+            lease.session_id != session_id
+            or lease.storage_session_id != storage_session_id
+        ):
+            raise ValueError("lease does not match event session")
         with self.database.begin() as connection:
             if lease is not None:
                 self._assert_lease(connection, storage_session_id, lease)
@@ -667,7 +676,8 @@ class SessionStore:
             ).with_for_update()
         ).mappings().first()
         if (
-            row is None
+            lease.storage_session_id != storage_session_id
+            or row is None
             or row["owner_id"] != lease.owner_id
             or int(row["fencing_token"]) != lease.fencing_token
             or float(row["lease_until"]) <= time.time()
@@ -684,7 +694,7 @@ class SessionCommandCoordinator:
             raise TypeError("session_store must be a SessionStore")
         self.event_store = event_store
         self.session_store = session_store
-        self.owner_id = f"pid:{os.getpid()}:{id(self)}"
+        self.owner_id = f"pid:{os.getpid()}:{uuid4()}"
 
     def append_explicit(
         self,

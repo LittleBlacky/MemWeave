@@ -253,4 +253,7 @@ TDD 验证：版本回退与独立 SessionStore 实例租约测试加入；相�
 租约抢占更新进一步采用旧 fencing token 和旧过期时间条件的 CAS；并发抢占失败的一方
 重新轮询，不会把两个 owner 错误地分配成同一个新 token。
 
+补充：`SessionLease` 绑定完整的 tenant/session storage key，拒绝跨租户复用同名
+session 的租约；Coordinator owner_id 使用进程号加随机 UUID，避免实例标识碰撞。
+
 最终 TDD 验证：Task 3/Task 2 相关测试 79 passed，核心回归集合 110 passed。
