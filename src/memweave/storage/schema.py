@@ -1,6 +1,6 @@
 """SQLAlchemy Core table metadata for the relational authority."""
 
-from sqlalchemy import Column, Integer, MetaData, String, Table, Text, UniqueConstraint
+from sqlalchemy import Column, Float, Integer, MetaData, String, Table, Text, UniqueConstraint
 
 
 metadata = MetaData()
@@ -53,6 +53,15 @@ session_states_table = Table(
     Column("last_seq", Integer, nullable=False),
     Column("recent_messages_json", Text, nullable=False),
     Column("active_memories_json", Text, nullable=False),
+)
+
+session_command_leases_table = Table(
+    "session_command_leases",
+    metadata,
+    Column("session_id", String(255), primary_key=True),
+    Column("owner_id", String(255), nullable=False),
+    Column("lease_until", Float, nullable=False),
+    Column("fencing_token", Integer, nullable=False),
 )
 
 schema_migrations_table = Table(

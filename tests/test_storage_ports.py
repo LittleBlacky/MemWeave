@@ -43,6 +43,7 @@ def test_sqlite_database_migrations_are_versioned_and_idempotent(tmp_path):
         "0002_outbox",
         "0003_outbox_consumer_receipts",
         "0004_session_states",
+        "0005_session_command_leases",
     ]
 
 
@@ -54,6 +55,7 @@ def test_default_migration_runner_discovers_packaged_migrations():
         "0002_outbox",
         "0003_outbox_consumer_receipts",
         "0004_session_states",
+        "0005_session_command_leases",
     ]
 
 
@@ -93,12 +95,14 @@ def test_generic_sqlalchemy_database_can_apply_core_migration(tmp_path):
         "0002_outbox",
         "0003_outbox_consumer_receipts",
         "0004_session_states",
+        "0005_session_command_leases",
     ]
     assert database.applied_migrations() == [
         "0001_core",
         "0002_outbox",
         "0003_outbox_consumer_receipts",
         "0004_session_states",
+        "0005_session_command_leases",
     ]
 
 
@@ -113,7 +117,7 @@ def test_generic_sqlalchemy_database_migrations_are_safe_under_concurrent_startu
     with ThreadPoolExecutor(max_workers=8) as executor:
         results = list(executor.map(apply_migrations, range(8)))
 
-    assert sum(result == ["0001_core", "0002_outbox", "0003_outbox_consumer_receipts", "0004_session_states"] for result in results) == 1
+    assert sum(result == ["0001_core", "0002_outbox", "0003_outbox_consumer_receipts", "0004_session_states", "0005_session_command_leases"] for result in results) == 1
     assert sum(result == [] for result in results) == 7
     assert database.apply_migrations() == []
     assert database.applied_migrations() == [
@@ -121,6 +125,7 @@ def test_generic_sqlalchemy_database_migrations_are_safe_under_concurrent_startu
         "0002_outbox",
         "0003_outbox_consumer_receipts",
         "0004_session_states",
+        "0005_session_command_leases",
     ]
 
 

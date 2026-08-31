@@ -1,4 +1,5 @@
 from concurrent.futures import ThreadPoolExecutor
+import time
 from threading import Event as ThreadEvent, Lock
 from uuid import uuid4
 
@@ -72,7 +73,7 @@ def test_projection_failure_leaves_event_for_replay(tmp_path):
     original_apply_event = sessions.apply_event
     calls = 0
 
-    def fail_once(event):
+    def fail_once(event, **_kwargs):
         nonlocal calls
         calls += 1
         if calls == 1:
@@ -237,7 +238,7 @@ def test_concurrent_commands_for_one_session_are_serialized(tmp_path):
     calls_lock = Lock()
     calls = 0
 
-    def delayed_apply(event):
+    def delayed_apply(event, **_kwargs):
         nonlocal calls
         with calls_lock:
             calls += 1
@@ -270,3 +271,56 @@ def test_concurrent_commands_for_one_session_are_serialized(tmp_path):
     state = sessions.get("s1")
     assert state.last_seq == 2
     assert {memory.value for memory in state.active_memories} == {"first", "second"}
+
+
+def test_database_lease_serializes_separate_session_store_instances(tmp_path):
+    database = Database(str(tmp_path / "memory.db"))
+    first = SessionStore(database)
+    second = SessionStore(database)
+    entered = ThreadEvent()
+    release = ThreadEvent()
+
+    def hold_lease():
+        with first.command_lease(
+            "session:s1", owner_id="process-a", wait_timeout=1
+        ):
+            entered.set()
+            assert release.wait(timeout=5)
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        holder = executor.submit(hold_lease)
+        assert entered.wait(timeout=5)
+        blocked = executor.submit(
+            lambda: second.command_lease(
+                "session:s1", owner_id="process-b", wait_timeout=0.05
+            ).__enter__()
+        )
+        with pytest.raises(TimeoutError):
+            blocked.result(timeout=5)
+        release.set()
+        holder.result(timeout=5)
+
+    with second.command_lease("session:s1", owner_id="process-b", wait_timeout=1) as lease:
+        assert lease.fencing_token == 2
+
+
+def test_fencing_token_rejects_projection_from_expired_owner(tmp_path):
+    database = Database(str(tmp_path / "memory.db"))
+    first = SessionStore(database)
+    second = SessionStore(database)
+    event = EventStore(database).append(
+        stream_id="session:s1",
+        event_type=EventType.USER_MESSAGE,
+        payload={"text": "hello"},
+        actor="user:u1",
+        request_id=uuid4(),
+    )
+
+    with first.command_lease(
+        "session:s1", owner_id="process-a", lease_seconds=0.01, wait_timeout=1
+    ) as old_lease:
+        time.sleep(0.03)
+        with second.command_lease("session:s1", owner_id="process-b", wait_timeout=1) as new_lease:
+            assert new_lease.fencing_token > old_lease.fencing_token
+            with pytest.raises(RuntimeError, match="lease is no longer valid"):
+                first.apply_event(event, lease=old_lease)

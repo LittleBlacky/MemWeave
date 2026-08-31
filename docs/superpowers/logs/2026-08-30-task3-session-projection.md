@@ -229,3 +229,28 @@ TDD 验证：新增 stale FORGET 回归测试；会话操作与协调器测试 1
   不宣称分布式 exactly-once。
 
 TDD 验证：新增同一 session 双线程显式命令测试；Task 3 会话相关测试 23 passed。
+
+## 跨进程命令租约与版本单调性
+
+日期：2026-08-31
+
+- `upsert_active()` 现在要求新写入的 `MemoryRecord.version` 严格大于当前版本，
+  防止 source_seq 前进但 memory version 回退；旧版本写入抛出 `StaleWriteError`。
+- 新增 `session_command_leases` 表（migration `0005_session_command_leases`），以
+  `(tenant/session, stream)` 的持久化键协调不同进程的命令；租约包含过期时间和递增
+  `fencing_token`。
+- Coordinator 在事件追加后、投影前验证租约 token；租约过期或被抢占时拒绝旧进程的
+  投影，事件保留在 EventStore，后续由恢复重放。
+- 释放租约只把 `lease_until` 置为过期而不删除记录，确保 fencing token 不回退。
+
+TDD 验证：版本回退与独立 SessionStore 实例租约测试加入；相关测试 62 passed，
+恢复、事件、协议、Outbox/Worker 回归测试 47 passed。
+
+补充修复：`apply_event()` 对 lease 使用 `SELECT ... FOR UPDATE`（SQLite 下由
+`BEGIN IMMEDIATE` 提供等价写事务串行化），并校验 lease 的 session 身份；Coordinator
+始终向具体 SessionStore 传递 fencing token，不再通过反射兼容分支绕过租约校验。
+
+租约抢占更新进一步采用旧 fencing token 和旧过期时间条件的 CAS；并发抢占失败的一方
+重新轮询，不会把两个 owner 错误地分配成同一个新 token。
+
+最终 TDD 验证：Task 3/Task 2 相关测试 79 passed，核心回归集合 110 passed。

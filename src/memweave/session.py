@@ -4,12 +4,15 @@ import json
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
+import os
+import time
 from threading import Lock, RLock
 from typing import Any, Protocol
 from uuid import UUID
 from weakref import WeakValueDictionary
 
-from sqlalchemy import select, update
+from sqlalchemy import insert, select, update
+from sqlalchemy.exc import IntegrityError, OperationalError
 
 from .errors import StaleWriteError
 from .models import (
@@ -23,7 +26,7 @@ from .models import (
     MemoryStatus,
     OperationType,
 )
-from .storage.schema import session_states_table
+from .storage.schema import session_command_leases_table, session_states_table
 
 
 def _json_default(value: Any) -> str:
@@ -59,6 +62,13 @@ class SessionCommandResult:
 
     event: Event
     state: SessionState
+
+
+@dataclass(frozen=True)
+class SessionLease:
+    session_id: str
+    owner_id: str
+    fencing_token: int
 
 
 @dataclass(frozen=True)
@@ -195,12 +205,98 @@ class SessionStore:
         with lock:
             yield
 
-    def apply_event(self, event: Event) -> SessionState:
+    @contextmanager
+    def command_lease(
+        self,
+        stream_id: str,
+        *,
+        owner_id: str,
+        lease_seconds: float = 30.0,
+        wait_timeout: float = 30.0,
+        poll_interval: float = 0.01,
+    ):
+        """Acquire a database-backed lease for cross-process command ordering."""
+        session_id = self._session_id_from_stream(stream_id)
+        if not isinstance(owner_id, str) or not owner_id.strip():
+            raise ValueError("owner_id must be a non-empty string")
+        if lease_seconds <= 0 or wait_timeout < 0 or poll_interval <= 0:
+            raise ValueError("lease timing values are invalid")
+        deadline = time.monotonic() + wait_timeout
+        lease = None
+        while lease is None:
+            now = time.time()
+            try:
+                with self.database.begin() as connection:
+                    row = connection.execute(
+                        select(session_command_leases_table).where(
+                            session_command_leases_table.c.session_id
+                            == self._storage_session_id(session_id)
+                        )
+                    ).mappings().first()
+                    if row is None:
+                        token = 1
+                        connection.execute(
+                            insert(session_command_leases_table).values(
+                                session_id=self._storage_session_id(session_id),
+                                owner_id=owner_id,
+                                lease_until=now + lease_seconds,
+                                fencing_token=token,
+                            )
+                        )
+                    elif float(row["lease_until"]) <= now:
+                        previous_token = int(row["fencing_token"])
+                        token = previous_token + 1
+                        updated = connection.execute(
+                            update(session_command_leases_table)
+                            .where(
+                                session_command_leases_table.c.session_id
+                                == self._storage_session_id(session_id),
+                                session_command_leases_table.c.fencing_token
+                                == previous_token,
+                                session_command_leases_table.c.lease_until <= now,
+                            )
+                            .values(
+                                owner_id=owner_id,
+                                lease_until=now + lease_seconds,
+                                fencing_token=token,
+                            )
+                        )
+                        if updated.rowcount != 1:
+                            token = None
+                    else:
+                        token = None
+                    if token is not None:
+                        lease = SessionLease(session_id, owner_id, token)
+            except (IntegrityError, OperationalError):
+                if time.monotonic() >= deadline:
+                    raise TimeoutError(f"timed out acquiring session lease for {stream_id}")
+            if lease is None:
+                if time.monotonic() >= deadline:
+                    raise TimeoutError(f"timed out acquiring session lease for {stream_id}")
+                time.sleep(min(poll_interval, max(0.0, deadline - time.monotonic())))
+        try:
+            yield lease
+        finally:
+            with self.database.begin() as connection:
+                connection.execute(
+                    update(session_command_leases_table).where(
+                        session_command_leases_table.c.session_id
+                        == self._storage_session_id(session_id),
+                        session_command_leases_table.c.owner_id == owner_id,
+                        session_command_leases_table.c.fencing_token == lease.fencing_token,
+                    ).values(lease_until=0.0)
+                )
+
+    def apply_event(self, event: Event, *, lease: SessionLease | None = None) -> SessionState:
         if not isinstance(event, Event):
             raise TypeError("event must be an Event")
         session_id = self._session_id_from_stream(event.stream_id)
+        if lease is not None and lease.session_id != session_id:
+            raise ValueError("lease does not match event session")
         storage_session_id = self._storage_session_id(session_id)
         with self.database.begin() as connection:
+            if lease is not None:
+                self._assert_lease(connection, storage_session_id, lease)
             state = self._read(connection, storage_session_id, session_id)
             if event.seq <= state.last_seq:
                 return state
@@ -353,6 +449,10 @@ class SessionStore:
                     return False
                 raise StaleWriteError(
                     f"conflicting session write for key {memory.key!r} at source_seq {memory.source_seq}"
+                )
+            if memory.version <= existing.version:
+                raise StaleWriteError(
+                    f"session memory version must increase: existing {existing.version}, got {memory.version}"
                 )
             state.active_memories[existing_index] = memory
             return True
@@ -559,6 +659,20 @@ class SessionStore:
         if not value.strip() or ":" in value:
             raise ValueError(f"{name} must be non-empty and must not contain ':'")
 
+    @staticmethod
+    def _assert_lease(connection, storage_session_id: str, lease: SessionLease) -> None:
+        row = connection.execute(
+            select(session_command_leases_table).where(
+                session_command_leases_table.c.session_id == storage_session_id
+            ).with_for_update()
+        ).mappings().first()
+        if (
+            row is None
+            or row["owner_id"] != lease.owner_id
+            or int(row["fencing_token"]) != lease.fencing_token
+            or float(row["lease_until"]) <= time.time()
+        ):
+            raise RuntimeError("session command lease is no longer valid")
 
 class SessionCommandCoordinator:
     """Append explicit commands as events, then synchronously project them."""
@@ -570,6 +684,7 @@ class SessionCommandCoordinator:
             raise TypeError("session_store must be a SessionStore")
         self.event_store = event_store
         self.session_store = session_store
+        self.owner_id = f"pid:{os.getpid()}:{id(self)}"
 
     def append_explicit(
         self,
@@ -593,17 +708,20 @@ class SessionCommandCoordinator:
             raise ValueError("operation scope_id does not match stream session")
 
         with self.session_store.command_lock(stream_id):
-            event = self.event_store.append(
-                stream_id=stream_id,
-                event_type=EventType.MEMORY_COMMAND,
-                payload={"operation": operation.model_dump(mode="json")},
-                actor=actor,
-                request_id=request_id,
-                event_id=event_id,
-                causation_id=causation_id,
-                correlation_id=correlation_id,
-                idempotency_key=idempotency_key,
-                protocol_version=protocol_version,
-            )
-            state = self.session_store.apply_event(event)
-            return SessionCommandResult(event=event, state=state)
+            with self.session_store.command_lease(
+                stream_id, owner_id=self.owner_id
+            ) as lease:
+                event = self.event_store.append(
+                    stream_id=stream_id,
+                    event_type=EventType.MEMORY_COMMAND,
+                    payload={"operation": operation.model_dump(mode="json")},
+                    actor=actor,
+                    request_id=request_id,
+                    event_id=event_id,
+                    causation_id=causation_id,
+                    correlation_id=correlation_id,
+                    idempotency_key=idempotency_key,
+                    protocol_version=protocol_version,
+                )
+                state = self.session_store.apply_event(event, lease=lease)
+                return SessionCommandResult(event=event, state=state)

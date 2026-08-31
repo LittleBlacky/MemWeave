@@ -226,6 +226,17 @@ def test_upsert_active_uses_event_watermark_and_conflict_rules(tmp_path):
         store.upsert_active(record(event_id=uuid4(), source_seq=2))
 
 
+def test_upsert_active_rejects_memory_version_rollback(tmp_path):
+    store = SessionStore(Database(str(tmp_path / "memory.db")))
+    source_event = project_event(store, 1)
+    store.upsert_active(record(event_id=source_event.event_id, source_seq=1))
+    project_event(store, 2)
+    with pytest.raises(StaleWriteError, match="version must increase"):
+        store.upsert_active(
+            record(event_id=uuid4(), value="Rust", source_seq=2)
+        )
+
+
 def test_session_store_namespaces_state_by_tenant(tmp_path):
     database = Database(str(tmp_path / "memory.db"))
     tenant_a = SessionStore(database, tenant_id="tenant-a")

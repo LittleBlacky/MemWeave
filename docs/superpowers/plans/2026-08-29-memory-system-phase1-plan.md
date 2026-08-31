@@ -145,7 +145,7 @@ docs/superpowers/logs/
 - Test: `tests/test_session_consistency.py`
 
 **Interfaces:**
-- `SessionStore(database, ..., tenant_id=None)` exposes `apply_event(event: Event) -> SessionState`, `get(session_id) -> SessionState`, and `upsert_active(memory) -> None`. Its `session_states` table is provisioned by migration `0004_session_states`. A tenant-scoped instance requires `tenant:<tenant_id>:session:<session_id>` streams and stores an isolated namespace; SessionStore still accepts only continuous event watermarks, with gaps handled by ProjectionDispatcher/ProjectionRuntime.
+- `SessionStore(database, ..., tenant_id=None)` exposes `apply_event(event: Event) -> SessionState`, `get(session_id) -> SessionState`, `upsert_active(memory) -> None`, and database-backed `command_lease()` for cross-process command ordering. Its `session_states` and `session_command_leases` tables are provisioned by migrations `0004_session_states` and `0005_session_command_leases`. A tenant-scoped instance requires `tenant:<tenant_id>:session:<session_id>` streams and stores an isolated namespace; SessionStore still accepts only continuous event watermarks, with gaps handled by ProjectionDispatcher/ProjectionRuntime.
 - `SessionCommandCoordinator.append_explicit(operation, *, stream_id, actor, request_id, ...) -> SessionCommandResult`; EventStore 先提交 `memory.command`，再同步投影到 SessionStore。
 - `SessionProjectionBackend` adapts SessionStore to the Task 2 `EventProjector` contract; `SessionReadBarrier.read(...) -> SessionReadResult` depends only on the `ProjectionCatchup` contract (`target_seq`/`catch_up`), catches up a lagging session, and reports `requested_seq`, `applied_seq`, `lagging`, and `degraded` metadata.
 - `ExplicitOperationParser.parse(text, context: ParseContext) -> list[MemoryOperation]`.
@@ -154,7 +154,7 @@ docs/superpowers/logs/
 - [x] **Step 1: Write failing tests** for Chinese/English remember, update, forget, ambiguous text returning no command, and N unrelated turns preserving the latest working value.
 - [x] **Step 2: Run the session test file** and verify failure.
 - [x] **Step 3: Implement synchronous projection updates** for turn events and explicit commands. The coordinator appends the authoritative event first, then applies the session projection; outbox delivery remains a later task. Parser must never accept caller-supplied identity or final source sequence.
-- [x] **Step 4: Run tests** for restart persistence, stale command rejection, immediate visibility, strict sequence recovery, tenant isolation, JSON snapshot boundaries, version-safe forget, and same-session concurrent command serialization.
+- [x] **Step 4: Run tests** for restart persistence, stale command rejection, immediate visibility, strict sequence recovery, tenant isolation, JSON snapshot boundaries, version-safe forget, same-session concurrent command serialization, monotonic memory versions, database leases, and fencing-token rejection.
 - [x] **Step 5: Commit** session projection changes in incremental commits, with the implementation and rationale recorded in `docs/superpowers/logs/2026-08-30-task3-session-projection.md`.
 
 ## Task 4: Durable Memory Authority, Versions, and Tombstones
