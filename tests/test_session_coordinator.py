@@ -149,3 +149,38 @@ def test_invalid_memory_command_does_not_advance_projection_watermark(tmp_path):
     state = sessions.get("s1")
     assert state.last_seq == 0
     assert state.recent_messages == []
+
+
+def test_contiguous_session_projection_rejects_event_sequence_gap(tmp_path):
+    sessions = SessionStore(Database(str(tmp_path / "memory.db")))
+    first = events = EventStore(sessions.database).append(
+        stream_id="session:s1",
+        event_type=EventType.USER_MESSAGE,
+        payload={"text": "first"},
+        actor="user:u1",
+        request_id=uuid4(),
+    )
+    sessions.apply_event(first)
+    second = EventStore(sessions.database).append(
+        stream_id="session:s1",
+        event_type=EventType.USER_MESSAGE,
+        payload={"text": "second"},
+        actor="user:u1",
+        request_id=uuid4(),
+    )
+    third = EventStore(sessions.database).append(
+        stream_id="session:s1",
+        event_type=EventType.USER_MESSAGE,
+        payload={"text": "third"},
+        actor="user:u1",
+        request_id=uuid4(),
+    )
+
+    with pytest.raises(ValueError, match="sequence gap"):
+        sessions.apply_event(third)
+    assert sessions.get("s1").last_seq == 1
+
+    recovered = sessions.apply_event(second)
+    assert recovered.last_seq == 2
+    recovered = sessions.apply_event(third)
+    assert recovered.last_seq == 3

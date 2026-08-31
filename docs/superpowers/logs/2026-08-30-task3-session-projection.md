@@ -101,3 +101,15 @@ TDD 验证：新增 `tests/test_session_coordinator.py`，覆盖 EventStore 失�
 - 新增测试验证未投影源事件不能直接创建 session memory，正常事件先投影后操作仍可用。
 
 TDD 验证：Task 3 相关测试 15 passed。
+
+## 严格收敛 Task 3 事件水位
+
+日期：2026-08-31
+
+- `SessionStore` 默认启用 `enforce_contiguous=True`，只接受
+  `last_seq + 1` 的下一个事件；
+- 缺口事件不得推进 session watermark，也不得写入最近事件或活动记忆；
+- 乱序缓存和恢复职责明确归属 `ProjectionDispatcher/ProjectionRuntime`，
+  SessionStore 不再作为缺口缓存；
+- `enforce_contiguous=False` 仅作为显式旧适配器迁移开关保留，不属于 Task 3
+  的标准生产路径；新代码不得依赖该模式。

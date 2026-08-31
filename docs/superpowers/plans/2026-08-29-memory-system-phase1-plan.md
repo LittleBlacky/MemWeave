@@ -145,7 +145,7 @@ docs/superpowers/logs/
 - Test: `tests/test_session_consistency.py`
 
 **Interfaces:**
-- `SessionStore.apply_event(event: Event) -> SessionState`; `get(session_id) -> SessionState`; `upsert_active(memory) -> None`.
+- `SessionStore.apply_event(event: Event) -> SessionState`; `get(session_id) -> SessionState`; `upsert_active(memory) -> None`. SessionStore 默认只接受连续事件水位；缺口由 ProjectionDispatcher/ProjectionRuntime 缓冲和恢复。
 - `SessionCommandCoordinator.append_explicit(operation, *, stream_id, actor, request_id, ...) -> SessionCommandResult`; EventStore 先提交 `memory.command`，再同步投影到 SessionStore。
 - `ExplicitOperationParser.parse(text, context: ParseContext) -> list[MemoryOperation]`.
 - `ParseContext` contains server-injected tenant/user/session/project and current source sequence.
