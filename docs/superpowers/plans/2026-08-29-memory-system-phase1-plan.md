@@ -151,11 +151,11 @@ docs/superpowers/logs/
 - `ExplicitOperationParser.parse(text, context: ParseContext) -> list[MemoryOperation]`.
 - `ParseContext` contains server-injected tenant/user/session/project and current source sequence.
 
-- [ ] **Step 1: Write failing tests** for Chinese/English remember, update, forget, ambiguous text returning no command, and N unrelated turns preserving the latest working value.
-- [ ] **Step 2: Run the session test file** and verify failure.
-- [ ] **Step 3: Implement synchronous projection updates** for turn events and explicit commands; insert outbox records in the same transaction. Parser must never accept caller-supplied identity or final source sequence.
-- [ ] **Step 4: Run tests** for restart persistence, stale command rejection, and immediate visibility.
-- [ ] **Step 5: Commit** with `feat: add session projection and explicit memory policy`.
+- [x] **Step 1: Write failing tests** for Chinese/English remember, update, forget, ambiguous text returning no command, and N unrelated turns preserving the latest working value.
+- [x] **Step 2: Run the session test file** and verify failure.
+- [x] **Step 3: Implement synchronous projection updates** for turn events and explicit commands. The coordinator appends the authoritative event first, then applies the session projection; outbox delivery remains a later task. Parser must never accept caller-supplied identity or final source sequence.
+- [x] **Step 4: Run tests** for restart persistence, stale command rejection, immediate visibility, strict sequence recovery, tenant isolation, JSON snapshot boundaries, and version-safe forget.
+- [x] **Step 5: Commit** session projection changes in incremental commits, with the implementation and rationale recorded in `docs/superpowers/logs/2026-08-30-task3-session-projection.md`.
 
 ## Task 4: Durable Memory Authority, Versions, and Tombstones
 

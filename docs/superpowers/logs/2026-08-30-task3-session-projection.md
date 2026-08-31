@@ -34,8 +34,8 @@ git diff --check
 
 ## 当前边界
 
-- 会话表暂由 `SessionStore` 幂等创建，尚未加入版本化迁移；后续需要在不破坏
-  Task 2 迁移契约的前提下补充专用 migration。
+- 会话表由 `0004_session_states` 版本化 migration provision；SessionStore 不再隐式
+  建表。自定义数据库适配器需要先执行统一 migration runner。
 - 显式 parser 当前只生成结构化操作，不负责执行操作或写入长期权威表。
 - Outbox、Durable Memory Store、Recall 和 Adapter 由后续 Task 实现。
 
