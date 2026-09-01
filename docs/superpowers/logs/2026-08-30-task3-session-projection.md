@@ -172,7 +172,7 @@ TDD 验证：新增直接 upsert 的水位、重复和冲突测试，Task 3 相�
 
 - `SessionStore` 增加可选 `tenant_id` 命名空间；多租户实例将 session 快照键隔离为
   `<tenant_id>:session:<session_id>`；
-- 配置租户后只接受对应的 `tenant:<tenant_id>:session:<session_id>` stream，跨租户
+- 配置租户后只接受对应的 `tenant:<tenant_id>/.../session:<session_id>` stream，跨租户
   事件在投影入口拒绝；
 - `stream_id_for_session()` 和 `SessionReadBarrier` 会生成匹配租户的规范 stream；
 - 未配置 tenant_id 的实例保留旧的全局命名空间，仅用于兼容单租户/迁移场景；多租户
@@ -263,6 +263,18 @@ session 的租约；Coordinator owner_id 使用进程号加随机 UUID，避免�
 日期：2026-09-01
 
 - 未配置 `tenant_id` 的 SessionStore 只用于全局/单租户 `session:<id>` stream；
-- 对 `tenant:<tenant_id>:session:<id>` 输入直接拒绝，防止不同租户的同名 session
+- 对 `tenant:<tenant_id>/session:<id>` 输入直接拒绝，防止不同租户的同名 session
   被错误折叠到全局 `session_id`；
 - 多租户路径必须显式创建 tenant-scoped SessionStore。
+
+## 统一可扩展 stream ID 语法
+
+日期：2026-09-01
+
+- 对齐设计协议和 Task 2 既有示例，scope segment 使用 `/` 分隔，字段和值使用 `:`：
+  `tenant:t1/session:s1`、`tenant:t1/project:p1/session:s1`；
+- tenant-scoped SessionStore 校验首段 tenant 与末段 session，中间 scope segment 保留
+  给 project/team 等扩展；
+- unscoped SessionStore 只接受严格的 `session:<id>`，不再从任意复合字符串中截取
+  session 后缀；
+- 内部 storage session key 保持不变，已有 session snapshot 和 lease 无需迁移。

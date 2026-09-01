@@ -630,6 +630,8 @@ class SessionStore:
             raise TypeError("session_id must be a string")
         if not session_id.strip():
             raise ValueError("session_id must not be blank")
+        if "/" in session_id:
+            raise ValueError("session_id must not contain '/'")
 
     def _session_id_from_stream(self, stream_id: str) -> str:
         if not isinstance(stream_id, str):
@@ -638,16 +640,22 @@ class SessionStore:
             raise ValueError("stream_id must not be blank")
         marker = "session:"
         if self.tenant_id is not None:
-            prefix = f"tenant:{self.tenant_id}:session:"
-            if not stream_id.startswith(prefix):
+            segments = stream_id.split("/")
+            if (
+                len(segments) < 2
+                or segments[0] != f"tenant:{self.tenant_id}"
+                or not segments[-1].startswith(marker)
+            ):
                 raise ValueError("stream_id does not match configured tenant")
-            session_id = stream_id[len(prefix) :]
+            if any(not segment or ":" not in segment for segment in segments[1:-1]):
+                raise ValueError("stream_id contains an invalid scope segment")
+            session_id = segments[-1][len(marker) :]
         elif stream_id.startswith("tenant:"):
             raise ValueError("tenant stream_id requires a tenant-scoped SessionStore")
-        elif marker in stream_id:
-            session_id = stream_id.rsplit(marker, 1)[1]
+        elif stream_id.startswith(marker):
+            session_id = stream_id[len(marker) :]
         else:
-            session_id = stream_id
+            raise ValueError("unscoped stream_id must use session:<id>")
         self._validate_session_id(session_id)
         return session_id
 
@@ -655,7 +663,7 @@ class SessionStore:
         self._validate_session_id(session_id)
         if self.tenant_id is None:
             return f"session:{session_id}"
-        return f"tenant:{self.tenant_id}:session:{session_id}"
+        return f"tenant:{self.tenant_id}/session:{session_id}"
 
     def _storage_session_id(self, session_id: str) -> str:
         self._validate_session_id(session_id)

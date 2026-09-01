@@ -244,14 +244,14 @@ def test_session_store_namespaces_state_by_tenant(tmp_path):
 
     event_a = Event(
         event_type=EventType.USER_MESSAGE,
-        stream_id="tenant:tenant-a:session:s1",
+        stream_id="tenant:tenant-a/session:s1",
         seq=1,
         actor="user:a",
         payload={"text": "A"},
     )
     event_b = Event(
         event_type=EventType.USER_MESSAGE,
-        stream_id="tenant:tenant-b:session:s1",
+        stream_id="tenant:tenant-b/session:s1",
         seq=1,
         actor="user:b",
         payload={"text": "B"},
@@ -289,7 +289,7 @@ def test_tenant_session_store_rejects_foreign_stream_id(tmp_path):
     store = SessionStore(Database(str(tmp_path / "memory.db")), tenant_id="tenant-a")
     event = Event(
         event_type=EventType.USER_MESSAGE,
-        stream_id="tenant:tenant-b:session:s1",
+        stream_id="tenant:tenant-b/session:s1",
         seq=1,
         actor="user:b",
         payload={"text": "B"},
@@ -303,7 +303,7 @@ def test_unscoped_session_store_rejects_tenant_streams(tmp_path):
     store = SessionStore(Database(str(tmp_path / "memory.db")))
     event = Event(
         event_type=EventType.USER_MESSAGE,
-        stream_id="tenant:tenant-a:session:s1",
+        stream_id="tenant:tenant-a/session:s1",
         seq=1,
         actor="user:a",
         payload={"text": "A"},
@@ -313,3 +313,19 @@ def test_unscoped_session_store_rejects_tenant_streams(tmp_path):
         store.apply_event(event)
 
     assert store.get("s1").last_seq == 0
+
+
+def test_tenant_session_store_accepts_extensible_scope_segments(tmp_path):
+    store = SessionStore(
+        Database(str(tmp_path / "memory.db")), tenant_id="tenant-a"
+    )
+    event = Event(
+        event_type=EventType.USER_MESSAGE,
+        stream_id="tenant:tenant-a/project:p1/session:s1",
+        seq=1,
+        actor="user:a",
+        payload={"text": "A"},
+    )
+
+    assert store.apply_event(event).session_id == "s1"
+    assert store.stream_id_for_session("s1") == "tenant:tenant-a/session:s1"
