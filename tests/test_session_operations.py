@@ -329,3 +329,35 @@ def test_tenant_session_store_accepts_extensible_scope_segments(tmp_path):
 
     assert store.apply_event(event).session_id == "s1"
     assert store.stream_id_for_session("s1") == "tenant:tenant-a/session:s1"
+
+
+def test_tenant_project_streams_with_same_session_id_are_isolated(tmp_path):
+    store = SessionStore(
+        Database(str(tmp_path / "memory.db")), tenant_id="tenant-a"
+    )
+    project_one_stream = "tenant:tenant-a/project:p1/session:s1"
+    project_two_stream = "tenant:tenant-a/project:p2/session:s1"
+    project_one = Event(
+        event_type=EventType.USER_MESSAGE,
+        stream_id=project_one_stream,
+        seq=1,
+        actor="user:a",
+        payload={"text": "project one"},
+    )
+    project_two = Event(
+        event_type=EventType.USER_MESSAGE,
+        stream_id=project_two_stream,
+        seq=1,
+        actor="user:a",
+        payload={"text": "project two"},
+    )
+
+    store.apply_event(project_one)
+    store.apply_event(project_two)
+
+    assert store.get("s1", stream_id=project_one_stream).recent_messages[0][
+        "payload"
+    ]["text"] == "project one"
+    assert store.get("s1", stream_id=project_two_stream).recent_messages[0][
+        "payload"
+    ]["text"] == "project two"

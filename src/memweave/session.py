@@ -107,7 +107,7 @@ class SessionProjectionBackend:
 
     def watermark(self, stream_id: str) -> int:
         session_id = self.session_store._session_id_from_stream(stream_id)
-        return self.session_store.get(session_id).last_seq
+        return self.session_store.get(session_id, stream_id=stream_id).last_seq
 
 
 class ProjectionCatchup(Protocol):
@@ -147,7 +147,7 @@ class SessionReadBarrier:
                 raise TypeError("target_seq must be an integer")
             if target_seq < 0:
                 raise ValueError("target_seq must not be negative")
-        state = self.session_store.get(session_id)
+        state = self.session_store.get(session_id, stream_id=resolved_stream)
         degraded = False
         error = None
         if target_seq is None:
@@ -170,7 +170,7 @@ class SessionReadBarrier:
             except Exception as exc:
                 degraded = True
                 error = str(exc)
-            state = self.session_store.get(session_id)
+            state = self.session_store.get(session_id, stream_id=resolved_stream)
         return SessionReadResult(
             state=state,
             requested_seq=requested_seq,
@@ -208,7 +208,7 @@ class SessionStore:
         """
 
         session_id = self._session_id_from_stream(stream_id)
-        key = self._storage_session_id(session_id)
+        key = self._storage_session_id(session_id, stream_id=stream_id)
         with self._command_locks_guard:
             lock = self._command_locks.get(key)
             if lock is None:
@@ -229,6 +229,7 @@ class SessionStore:
     ):
         """Acquire a database-backed lease for cross-process command ordering."""
         session_id = self._session_id_from_stream(stream_id)
+        storage_session_id = self._storage_session_id(session_id, stream_id=stream_id)
         if not isinstance(owner_id, str) or not owner_id.strip():
             raise ValueError("owner_id must be a non-empty string")
         if lease_seconds <= 0 or wait_timeout < 0 or poll_interval <= 0:
@@ -242,14 +243,14 @@ class SessionStore:
                     row = connection.execute(
                         select(session_command_leases_table).where(
                             session_command_leases_table.c.session_id
-                            == self._storage_session_id(session_id)
+                            == storage_session_id
                         )
                     ).mappings().first()
                     if row is None:
                         token = 1
                         connection.execute(
                             insert(session_command_leases_table).values(
-                                session_id=self._storage_session_id(session_id),
+                                session_id=storage_session_id,
                                 owner_id=owner_id,
                                 lease_until=now + lease_seconds,
                                 fencing_token=token,
@@ -262,7 +263,7 @@ class SessionStore:
                             update(session_command_leases_table)
                             .where(
                                 session_command_leases_table.c.session_id
-                                == self._storage_session_id(session_id),
+                                == storage_session_id,
                                 session_command_leases_table.c.fencing_token
                                 == previous_token,
                                 session_command_leases_table.c.lease_until <= now,
@@ -282,7 +283,7 @@ class SessionStore:
                             session_id=session_id,
                             owner_id=owner_id,
                             fencing_token=token,
-                            storage_session_id=self._storage_session_id(session_id),
+                            storage_session_id=storage_session_id,
                         )
             except IntegrityError:
                 if time.monotonic() >= deadline:
@@ -303,7 +304,7 @@ class SessionStore:
                 connection.execute(
                     update(session_command_leases_table).where(
                         session_command_leases_table.c.session_id
-                        == self._storage_session_id(session_id),
+                        == storage_session_id,
                         session_command_leases_table.c.owner_id == owner_id,
                         session_command_leases_table.c.fencing_token == lease.fencing_token,
                     ).values(lease_until=0.0)
@@ -313,7 +314,9 @@ class SessionStore:
         if not isinstance(event, Event):
             raise TypeError("event must be an Event")
         session_id = self._session_id_from_stream(event.stream_id)
-        storage_session_id = self._storage_session_id(session_id)
+        storage_session_id = self._storage_session_id(
+            session_id, stream_id=event.stream_id
+        )
         if lease is not None and (
             lease.session_id != session_id
             or lease.storage_session_id != storage_session_id
@@ -346,16 +349,26 @@ class SessionStore:
             if self._is_recent_event(event):
                 self._append_recent_event(state, event)
             state.last_seq = event.seq
-            self._write(connection, state)
+            self._write(connection, state, storage_session_id)
             return state
 
-    def get(self, session_id: str) -> SessionState:
+    def get(self, session_id: str, *, stream_id: str | None = None) -> SessionState:
+        """Read one stream-specific session snapshot.
+
+        Omitting ``stream_id`` selects the canonical session stream for backward
+        compatibility. Callers using project or other extended scope segments
+        must provide the full stream ID because a session ID alone is ambiguous.
+        """
         self._validate_session_id(session_id)
-        storage_session_id = self._storage_session_id(session_id)
+        storage_session_id = self._storage_session_id(
+            session_id, stream_id=stream_id
+        )
         with self.database.read() as connection:
             return self._read(connection, storage_session_id, session_id)
 
-    def upsert_active(self, memory: MemoryRecord) -> None:
+    def upsert_active(
+        self, memory: MemoryRecord, *, stream_id: str | None = None
+    ) -> None:
         if not isinstance(memory, MemoryRecord):
             raise TypeError("memory must be a MemoryRecord")
         if memory.scope is not MemoryScope.SESSION:
@@ -363,7 +376,9 @@ class SessionStore:
         if memory.scope_id.strip() == "":
             raise ValueError("memory scope_id must not be blank")
         session_id = memory.scope_id
-        storage_session_id = self._storage_session_id(session_id)
+        storage_session_id = self._storage_session_id(
+            session_id, stream_id=stream_id
+        )
         with self.database.begin() as connection:
             state = self._read(connection, storage_session_id, session_id)
             if memory.source_seq > state.last_seq:
@@ -372,7 +387,7 @@ class SessionStore:
                     "apply the source event first"
                 )
             if self._upsert_memory_to_state(state, memory):
-                self._write(connection, state)
+                self._write(connection, state, storage_session_id)
 
     def apply_operation(
         self,
@@ -380,12 +395,15 @@ class SessionStore:
         *,
         source_seq: int,
         source_event_id: UUID | str,
+        stream_id: str | None = None,
     ) -> SessionState:
         """Apply one trusted explicit operation to the session projection.
 
         ``source_seq`` and ``source_event_id`` are supplied by the event/adapter
         boundary, never parsed from user text.  The method is intentionally
         session-scoped; durable cross-session authority is handled later.
+        Extended scope streams must be supplied explicitly because a session ID
+        alone identifies the canonical stream only.
         """
         if not isinstance(operation, MemoryOperation):
             raise TypeError("operation must be a MemoryOperation")
@@ -402,7 +420,9 @@ class SessionStore:
             raise ValueError("source_event_id must not be blank")
 
         session_id = operation.scope_id
-        storage_session_id = self._storage_session_id(session_id)
+        storage_session_id = self._storage_session_id(
+            session_id, stream_id=stream_id
+        )
         with self.database.begin() as connection:
             state = self._read(connection, storage_session_id, session_id)
             if source_seq > state.last_seq:
@@ -415,7 +435,7 @@ class SessionStore:
                 source_seq=source_seq,
                 source_event_id=source_event_id_value,
             ):
-                self._write(connection, state)
+                self._write(connection, state, storage_session_id)
             return state
 
     @staticmethod
@@ -631,8 +651,7 @@ class SessionStore:
             active_memories=[MemoryRecord.model_validate(item) for item in json.loads(row["active_memories_json"])],
         )
 
-    def _write(self, connection, state: SessionState) -> None:
-        storage_session_id = self._storage_session_id(state.session_id)
+    def _write(self, connection, state: SessionState, storage_session_id: str) -> None:
         values = {
             "last_seq": state.last_seq,
             "recent_messages_json": json.dumps(state.recent_messages, sort_keys=True),
@@ -700,8 +719,19 @@ class SessionStore:
             return f"session:{session_id}"
         return f"tenant:{self.tenant_id}/session:{session_id}"
 
-    def _storage_session_id(self, session_id: str) -> str:
+    def _storage_session_id(
+        self, session_id: str, *, stream_id: str | None = None
+    ) -> str:
         self._validate_session_id(session_id)
+        canonical_stream_id = self.stream_id_for_session(session_id)
+        if stream_id is not None:
+            if self._session_id_from_stream(stream_id) != session_id:
+                raise ValueError("stream_id does not match session_id")
+            if stream_id != canonical_stream_id:
+                stream_identity = uuid5(
+                    NAMESPACE_URL, f"memweave:session-stream:{stream_id}"
+                )
+                return f"stream:{stream_identity}"
         if self.tenant_id is None:
             return session_id
         return f"{self.tenant_id}:session:{session_id}"

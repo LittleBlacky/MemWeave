@@ -332,3 +332,20 @@ TDD 验证：Task 3 会话操作、协调器和读取屏障测试 33 passed。
 - 新增调用方为 REMEMBER 指定 ID 的拒绝测试，确认事件与会话投影均不会写入。
 
 TDD 验证：模型与 Task 3 会话测试 42 passed。
+
+## 扩展 scope stream 的投影隔离
+
+日期：2026-09-01
+
+- 修复 tenant-scoped SessionStore 接受 `project:<id>` 等中间 scope segment、但快照水位
+  仅按 `(tenant_id, session_id)` 存储的问题；不同 project 的同名 session 都从 seq=1
+  开始，第二条事件此前会被静默误判为已投影。
+- 非 canonical 的扩展 session stream 现在使用完整 stream 派生的稳定内部存储键，快照、
+  进程内命令锁和跨进程 lease 由此一起隔离；canonical stream 保持原有存储键，已有数据
+  无需迁移。
+- `SessionStore.get()`、读屏障和投影水位读取均支持完整 `stream_id`。省略该参数仍读取
+  canonical stream；使用 project 等扩展 scope 的调用方必须传入完整 stream，避免同名
+  `session_id` 的读取歧义。
+- 新增同一 tenant、不同 project、同名 session 的独立投影与读屏障回归测试。
+
+TDD 验证：Task 3 会话操作、协调器和读取屏障测试 36 passed。

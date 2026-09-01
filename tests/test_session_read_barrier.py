@@ -2,7 +2,7 @@ from uuid import uuid4
 
 from memweave.db import Database
 from memweave.events import EventStore
-from memweave.models import EventType
+from memweave.models import Event, EventType
 from memweave.session import (
     SessionProjectionBackend,
     SessionReadBarrier,
@@ -170,6 +170,46 @@ def test_read_barrier_returns_local_state_when_target_watermark_is_unavailable(t
     assert result.lagging is False
     assert result.degraded is True
     assert result.error == "event authority unavailable"
+
+
+def test_read_barrier_reads_the_requested_project_session_stream(tmp_path):
+    database = Database(str(tmp_path / "memory.db"))
+    sessions = SessionStore(database, tenant_id="tenant-a")
+    project_one_stream = "tenant:tenant-a/project:p1/session:s1"
+    project_two_stream = "tenant:tenant-a/project:p2/session:s1"
+    sessions.apply_event(
+        Event(
+            event_type=EventType.USER_MESSAGE,
+            stream_id=project_one_stream,
+            seq=1,
+            actor="user:a",
+            payload={"text": "project one"},
+        )
+    )
+    sessions.apply_event(
+        Event(
+            event_type=EventType.USER_MESSAGE,
+            stream_id=project_two_stream,
+            seq=1,
+            actor="user:a",
+            payload={"text": "project two"},
+        )
+    )
+
+    class AlreadyCurrent:
+        def target_seq(self, stream_id):
+            assert stream_id == project_two_stream
+            return 1
+
+        def catch_up(self, stream_id, target_seq):
+            raise AssertionError("the requested stream is already current")
+
+    result = SessionReadBarrier(sessions, AlreadyCurrent()).read(
+        "s1", stream_id=project_two_stream
+    )
+
+    assert result.lagging is False
+    assert result.state.recent_messages[0]["payload"]["text"] == "project two"
 
 
 def test_session_projection_health_reports_missing_schema(tmp_path):
