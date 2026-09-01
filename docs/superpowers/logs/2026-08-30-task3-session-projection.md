@@ -305,3 +305,18 @@ session 的租约；Coordinator owner_id 使用进程号加随机 UUID，避免�
 - 健康检查通过只读查询验证数据库连接和 `session_states` 表可用；
 - 异常交由 ProjectionDispatcher 统一转换为 `False` 并保留具体错误，检查过程不执行
   migration 或隐式修复。
+
+## 确定性记忆身份与完整重建
+
+日期：2026-09-01
+
+- 修复 REMEMBER 重放时由 `MemoryRecord` 默认工厂生成随机 ID 的问题；否则后续按
+  `memory_id` 写入的 FORGET 在空库重建后无法命中新记录，已删除记忆会重新出现。
+- 新记忆 ID 由权威 `source_event_id` 确定性派生，旧的 `memory.command` 事件无需迁移；
+  操作显式携带 `memory_id` 时继续尊重该身份。
+- 同一 key 的后续 REMEMBER/UPDATE 保留已有 memory ID 和 `created_at`，并使用事件
+  `occurred_at` 作为 `updated_at`，确保相同事件流生成相同会话快照。
+- 新增 REMEMBER、按 ID FORGET、空库完整重放回归测试，同时比较重建前后的完整
+  `MemoryRecord` 并验证删除结果不会复活。
+
+TDD 验证：Task 3 会话操作、协调器和读取屏障测试 33 passed。

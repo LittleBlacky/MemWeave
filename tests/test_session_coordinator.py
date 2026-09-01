@@ -120,6 +120,47 @@ def test_replaying_same_memory_command_event_is_idempotent(tmp_path):
     assert len(replayed.active_memories) == 1
 
 
+def test_full_rebuild_preserves_memory_id_for_id_based_forget(tmp_path):
+    database = Database(str(tmp_path / "authority.db"))
+    events = EventStore(database)
+    sessions = SessionStore(database)
+    coordinator = SessionCommandCoordinator(events, sessions)
+
+    remembered = coordinator.append_explicit(
+        remember(),
+        stream_id="session:s1",
+        actor="user:u1",
+        request_id=uuid4(),
+    )
+    original_memory = remembered.state.active_memories[0]
+    memory_id = original_memory.id
+    forgotten = coordinator.append_explicit(
+        MemoryOperation(
+            operation=OperationType.FORGET,
+            scope=MemoryScope.SESSION,
+            scope_id="s1",
+            memory_id=memory_id,
+        ),
+        stream_id="session:s1",
+        actor="user:u1",
+        request_id=uuid4(),
+    )
+    assert forgotten.state.active_memories == []
+
+    rebuilt = SessionStore(Database(str(tmp_path / "rebuilt.db")))
+    rebuilt_after_remember = rebuilt.apply_event(
+        events.list_after("session:s1", 0)[0]
+    )
+    assert rebuilt_after_remember.active_memories == [original_memory]
+
+    for event in events.list_after("session:s1", 1):
+        rebuilt.apply_event(event)
+
+    rebuilt_state = rebuilt.get("s1")
+    assert rebuilt_state.last_seq == 2
+    assert rebuilt_state.active_memories == []
+
+
 def test_scope_mismatch_is_rejected_before_event_append(tmp_path):
     database = Database(str(tmp_path / "memory.db"))
     events = EventStore(database)

@@ -8,7 +8,7 @@ import os
 import time
 from threading import Lock, RLock
 from typing import Any, Protocol
-from uuid import UUID, uuid4
+from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 from weakref import WeakValueDictionary
 
 from sqlalchemy import insert, select, update
@@ -341,6 +341,7 @@ class SessionStore:
                     operation,
                     source_seq=event.seq,
                     source_event_id=event.event_id,
+                    source_occurred_at=event.occurred_at,
                 )
             if self._is_recent_event(event):
                 self._append_recent_event(state, event)
@@ -492,6 +493,7 @@ class SessionStore:
         *,
         source_seq: int,
         source_event_id: UUID | str,
+        source_occurred_at: datetime | None = None,
     ) -> bool:
         source_event_id_value = str(source_event_id)
         existing_index = cls._memory_index(state, operation)
@@ -563,7 +565,24 @@ class SessionStore:
                 event_ids=[*source.event_ids, source_event_id_value],
                 extractor=source.extractor,
             )
+        record_id = (
+            existing.id
+            if existing is not None
+            else operation.memory_id
+            or uuid5(
+                NAMESPACE_URL,
+                f"memweave:session-memory:{source_event_id_value}",
+            )
+        )
+        record_times = {}
+        if created_at is not None:
+            record_times["created_at"] = created_at
+        elif source_occurred_at is not None:
+            record_times["created_at"] = source_occurred_at
+        if source_occurred_at is not None:
+            record_times["updated_at"] = source_occurred_at
         record = MemoryRecord(
+            id=record_id,
             kind=operation.kind or MemoryKind.WORKING,
             scope=MemoryScope.SESSION,
             scope_id=operation.scope_id,
@@ -574,7 +593,7 @@ class SessionStore:
             source=source,
             source_seq=source_seq,
             version=version,
-            **({"created_at": created_at} if created_at is not None else {}),
+            **record_times,
         )
         return cls._upsert_memory_to_state(state, record)
 
