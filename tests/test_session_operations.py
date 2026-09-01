@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from uuid import uuid4
+from uuid import NAMESPACE_URL, uuid4, uuid5
 
 import pytest
 
@@ -17,6 +17,7 @@ from memweave.models import (
     OperationType,
 )
 from memweave.session import SessionStore
+from memweave.storage.schema import session_states_table
 
 
 def operation(operation_type, *, key, value=None, expected_version=None):
@@ -361,3 +362,23 @@ def test_tenant_project_streams_with_same_session_id_are_isolated(tmp_path):
     assert store.get("s1", stream_id=project_two_stream).recent_messages[0][
         "payload"
     ]["text"] == "project two"
+
+
+def test_legacy_extended_snapshot_requires_replay(tmp_path):
+    database = Database(str(tmp_path / "memory.db"))
+    store = SessionStore(database, tenant_id="tenant-a")
+    stream_id = "tenant:tenant-a/project:p1/session:s1"
+    stream_identity = uuid5(NAMESPACE_URL, f"memweave:session-stream:{stream_id}")
+    storage_id = f"stream:{stream_identity}"
+    with database.begin() as connection:
+        connection.execute(
+            session_states_table.insert().values(
+                session_id=storage_id,
+                last_seq=1,
+                recent_messages_json="[]",
+                active_memories_json="[]",
+            )
+        )
+
+    with pytest.raises(RuntimeError, match="replay required"):
+        store.get("s1", stream_id=stream_id)

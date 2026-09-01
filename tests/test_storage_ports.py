@@ -4,7 +4,7 @@ from threading import Barrier, Event as ThreadEvent, Lock
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import text
+from sqlalchemy import inspect, text
 from sqlalchemy.exc import ProgrammingError
 
 from memweave.events import EventStore
@@ -44,6 +44,7 @@ def test_sqlite_database_migrations_are_versioned_and_idempotent(tmp_path):
         "0003_outbox_consumer_receipts",
         "0004_session_states",
         "0005_session_command_leases",
+        "0006_session_stream_identity",
     ]
 
 
@@ -56,6 +57,7 @@ def test_default_migration_runner_discovers_packaged_migrations():
         "0003_outbox_consumer_receipts",
         "0004_session_states",
         "0005_session_command_leases",
+        "0006_session_stream_identity",
     ]
 
 
@@ -96,6 +98,7 @@ def test_generic_sqlalchemy_database_can_apply_core_migration(tmp_path):
         "0003_outbox_consumer_receipts",
         "0004_session_states",
         "0005_session_command_leases",
+        "0006_session_stream_identity",
     ]
     assert database.applied_migrations() == [
         "0001_core",
@@ -103,7 +106,45 @@ def test_generic_sqlalchemy_database_can_apply_core_migration(tmp_path):
         "0003_outbox_consumer_receipts",
         "0004_session_states",
         "0005_session_command_leases",
+        "0006_session_stream_identity",
     ]
+
+
+def test_stream_identity_migration_upgrades_legacy_session_tables(tmp_path):
+    database = SQLAlchemyDatabase(f"sqlite+pysqlite:///{tmp_path / 'legacy.db'}")
+    with database.begin() as connection:
+        connection.exec_driver_sql(
+            "CREATE TABLE session_states ("
+            "session_id VARCHAR(255) PRIMARY KEY, last_seq INTEGER NOT NULL, "
+            "recent_messages_json TEXT NOT NULL, active_memories_json TEXT NOT NULL)"
+        )
+        connection.exec_driver_sql(
+            "CREATE TABLE session_command_leases ("
+            "session_id VARCHAR(255) PRIMARY KEY, owner_id VARCHAR(255) NOT NULL, "
+            "lease_until FLOAT NOT NULL, fencing_token INTEGER NOT NULL)"
+        )
+        connection.exec_driver_sql(
+            "CREATE TABLE schema_migrations (version VARCHAR(255) PRIMARY KEY, applied_at VARCHAR(64) NOT NULL)"
+        )
+        connection.execute(
+            text(
+                "INSERT INTO schema_migrations(version, applied_at) VALUES "
+                "('0001_core', 'now'), ('0002_outbox', 'now'), "
+                "('0003_outbox_consumer_receipts', 'now'), ('0004_session_states', 'now'), "
+                "('0005_session_command_leases', 'now')"
+            )
+        )
+
+    assert database.apply_migrations() == ["0006_session_stream_identity"]
+    with database.read() as connection:
+        assert "stream_id" in {
+            column["name"]
+            for column in inspect(connection).get_columns("session_states")
+        }
+        assert "stream_id" in {
+            column["name"]
+            for column in inspect(connection).get_columns("session_command_leases")
+        }
 
 
 def test_generic_sqlalchemy_database_migrations_are_safe_under_concurrent_startup(tmp_path):
@@ -117,7 +158,7 @@ def test_generic_sqlalchemy_database_migrations_are_safe_under_concurrent_startu
     with ThreadPoolExecutor(max_workers=8) as executor:
         results = list(executor.map(apply_migrations, range(8)))
 
-    assert sum(result == ["0001_core", "0002_outbox", "0003_outbox_consumer_receipts", "0004_session_states", "0005_session_command_leases"] for result in results) == 1
+    assert sum(result == ["0001_core", "0002_outbox", "0003_outbox_consumer_receipts", "0004_session_states", "0005_session_command_leases", "0006_session_stream_identity"] for result in results) == 1
     assert sum(result == [] for result in results) == 7
     assert database.apply_migrations() == []
     assert database.applied_migrations() == [
@@ -126,6 +167,7 @@ def test_generic_sqlalchemy_database_migrations_are_safe_under_concurrent_startu
         "0003_outbox_consumer_receipts",
         "0004_session_states",
         "0005_session_command_leases",
+        "0006_session_stream_identity",
     ]
 
 

@@ -346,6 +346,10 @@ TDD 验证：模型与 Task 3 会话测试 42 passed。
 - `SessionStore.get()`、读屏障和投影水位读取均支持完整 `stream_id`。省略该参数仍读取
   canonical stream；使用 project 等扩展 scope 的调用方必须传入完整 stream，避免同名
   `session_id` 的读取歧义。
+- 迁移后发现旧版本写入的 `stream:<hash>` 快照或租约没有完整身份时，按 legacy 执行：
+  读取/投影直接报告需要从 EventStore 重放，不把无法归属的旧数据静默暴露给新 project。
+- `0006_session_stream_identity` 使用跨 SQLite/PostgreSQL 方言可执行的显式 `ALTER TABLE`
+  增列，并新增旧 `0005` 数据库升级回归测试；全新数据库仍由版本化 schema 直接创建新列。
 - 新增同一 tenant、不同 project、同名 session 的独立投影与读屏障回归测试。
 
 TDD 验证：Task 3 会话操作、协调器和读取屏障测试 36 passed。

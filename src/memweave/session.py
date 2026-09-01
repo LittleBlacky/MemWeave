@@ -67,6 +67,7 @@ class SessionCommandResult:
 @dataclass(frozen=True)
 class SessionLease:
     session_id: str
+    stream_id: str
     owner_id: str
     fencing_token: int
     storage_session_id: str
@@ -251,6 +252,7 @@ class SessionStore:
                         connection.execute(
                             insert(session_command_leases_table).values(
                                 session_id=storage_session_id,
+                                stream_id=stream_id,
                                 owner_id=owner_id,
                                 lease_until=now + lease_seconds,
                                 fencing_token=token,
@@ -270,6 +272,7 @@ class SessionStore:
                             )
                             .values(
                                 owner_id=owner_id,
+                                stream_id=stream_id,
                                 lease_until=now + lease_seconds,
                                 fencing_token=token,
                             )
@@ -281,6 +284,7 @@ class SessionStore:
                     if token is not None:
                         lease = SessionLease(
                             session_id=session_id,
+                            stream_id=stream_id,
                             owner_id=owner_id,
                             fencing_token=token,
                             storage_session_id=storage_session_id,
@@ -325,7 +329,9 @@ class SessionStore:
         with self.database.begin() as connection:
             if lease is not None:
                 self._assert_lease(connection, storage_session_id, lease)
-            state = self._read(connection, storage_session_id, session_id)
+            state = self._read(
+                connection, storage_session_id, session_id, stream_id=event.stream_id
+            )
             if event.seq <= state.last_seq:
                 return state
             if event.seq != state.last_seq + 1:
@@ -349,7 +355,9 @@ class SessionStore:
             if self._is_recent_event(event):
                 self._append_recent_event(state, event)
             state.last_seq = event.seq
-            self._write(connection, state, storage_session_id)
+            self._write(
+                connection, state, storage_session_id, stream_id=event.stream_id
+            )
             return state
 
     def get(self, session_id: str, *, stream_id: str | None = None) -> SessionState:
@@ -360,11 +368,14 @@ class SessionStore:
         must provide the full stream ID because a session ID alone is ambiguous.
         """
         self._validate_session_id(session_id)
+        resolved_stream = stream_id or self.stream_id_for_session(session_id)
         storage_session_id = self._storage_session_id(
-            session_id, stream_id=stream_id
+            session_id, stream_id=resolved_stream
         )
         with self.database.read() as connection:
-            return self._read(connection, storage_session_id, session_id)
+            return self._read(
+                connection, storage_session_id, session_id, stream_id=resolved_stream
+            )
 
     def upsert_active(
         self, memory: MemoryRecord, *, stream_id: str | None = None
@@ -376,18 +387,23 @@ class SessionStore:
         if memory.scope_id.strip() == "":
             raise ValueError("memory scope_id must not be blank")
         session_id = memory.scope_id
+        resolved_stream = stream_id or self.stream_id_for_session(session_id)
         storage_session_id = self._storage_session_id(
-            session_id, stream_id=stream_id
+            session_id, stream_id=resolved_stream
         )
         with self.database.begin() as connection:
-            state = self._read(connection, storage_session_id, session_id)
+            state = self._read(
+                connection, storage_session_id, session_id, stream_id=resolved_stream
+            )
             if memory.source_seq > state.last_seq:
                 raise ValueError(
                     "memory source_seq must not exceed the session watermark; "
                     "apply the source event first"
                 )
             if self._upsert_memory_to_state(state, memory):
-                self._write(connection, state, storage_session_id)
+                self._write(
+                    connection, state, storage_session_id, stream_id=resolved_stream
+                )
 
     def apply_operation(
         self,
@@ -420,11 +436,14 @@ class SessionStore:
             raise ValueError("source_event_id must not be blank")
 
         session_id = operation.scope_id
+        resolved_stream = stream_id or self.stream_id_for_session(session_id)
         storage_session_id = self._storage_session_id(
-            session_id, stream_id=stream_id
+            session_id, stream_id=resolved_stream
         )
         with self.database.begin() as connection:
-            state = self._read(connection, storage_session_id, session_id)
+            state = self._read(
+                connection, storage_session_id, session_id, stream_id=resolved_stream
+            )
             if source_seq > state.last_seq:
                 raise ValueError(
                     "source_seq must not exceed the session watermark; apply the source event first"
@@ -435,7 +454,9 @@ class SessionStore:
                 source_seq=source_seq,
                 source_event_id=source_event_id_value,
             ):
-                self._write(connection, state, storage_session_id)
+                self._write(
+                    connection, state, storage_session_id, stream_id=resolved_stream
+                )
             return state
 
     @staticmethod
@@ -635,7 +656,11 @@ class SessionStore:
 
     @staticmethod
     def _read(
-        connection, storage_session_id: str, logical_session_id: str
+        connection,
+        storage_session_id: str,
+        logical_session_id: str,
+        *,
+        stream_id: str | None = None,
     ) -> SessionState:
         row = connection.execute(
             select(session_states_table).where(
@@ -644,6 +669,14 @@ class SessionStore:
         ).mappings().first()
         if row is None:
             return SessionState(session_id=logical_session_id)
+        expected_stream_id = stream_id or f"session:{logical_session_id}"
+        persisted_stream_id = row.get("stream_id")
+        if persisted_stream_id is None and storage_session_id.startswith("stream:"):
+            raise RuntimeError(
+                "legacy extended session projection has no stream identity; replay required"
+            )
+        if persisted_stream_id is not None and persisted_stream_id != expected_stream_id:
+            raise RuntimeError("session projection stream identity mismatch")
         return SessionState(
             session_id=logical_session_id,
             last_seq=int(row["last_seq"]),
@@ -651,8 +684,17 @@ class SessionStore:
             active_memories=[MemoryRecord.model_validate(item) for item in json.loads(row["active_memories_json"])],
         )
 
-    def _write(self, connection, state: SessionState, storage_session_id: str) -> None:
+    def _write(
+        self,
+        connection,
+        state: SessionState,
+        storage_session_id: str,
+        *,
+        stream_id: str | None = None,
+    ) -> None:
+        persisted_stream_id = stream_id or self.stream_id_for_session(state.session_id)
         values = {
+            "stream_id": persisted_stream_id,
             "last_seq": state.last_seq,
             "recent_messages_json": json.dumps(state.recent_messages, sort_keys=True),
             "active_memories_json": json.dumps(
@@ -753,6 +795,11 @@ class SessionStore:
         if (
             lease.storage_session_id != storage_session_id
             or row is None
+            or (
+                row.get("stream_id") is None
+                and storage_session_id.startswith("stream:")
+            )
+            or (row.get("stream_id") is not None and row["stream_id"] != lease.stream_id)
             or row["owner_id"] != lease.owner_id
             or int(row["fencing_token"]) != lease.fencing_token
             or float(row["lease_until"]) <= time.time()
