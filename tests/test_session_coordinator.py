@@ -4,12 +4,14 @@ from threading import Event as ThreadEvent, Lock
 from uuid import uuid4
 
 import pytest
+from sqlalchemy.exc import OperationalError
 
 from memweave.db import Database
 from memweave.events import EventStore
 from memweave.models import EventType, MemoryOperation, MemoryScope, OperationType
 from memweave.policy import ExplicitOperationParser, ParseContext
 from memweave.session import SessionCommandCoordinator, SessionStore
+from memweave.storage.sqlalchemy import SQLAlchemyDatabase
 
 
 def remember(scope_id="s1", key="database.engine", value="PostgreSQL"):
@@ -341,3 +343,14 @@ def test_lease_is_bound_to_tenant_storage_namespace(tmp_path):
     with tenant_b.command_lease("tenant:tenant-b/session:s1", owner_id="process-a") as lease:
         with pytest.raises(ValueError, match="lease does not match"):
             tenant_a.apply_event(event, lease=lease)
+
+
+def test_command_lease_does_not_mask_permanent_database_errors(tmp_path):
+    database = SQLAlchemyDatabase(f"sqlite+pysqlite:///{tmp_path / 'unmigrated.db'}")
+    store = SessionStore(database)
+
+    with pytest.raises(OperationalError, match="no such table"):
+        with store.command_lease(
+            "session:s1", owner_id="process-a", wait_timeout=0
+        ):
+            raise AssertionError("lease must not be acquired")

@@ -273,9 +273,14 @@ class SessionStore:
                             fencing_token=token,
                             storage_session_id=self._storage_session_id(session_id),
                         )
-            except (IntegrityError, OperationalError):
+            except IntegrityError:
                 if time.monotonic() >= deadline:
                     raise TimeoutError(f"timed out acquiring session lease for {stream_id}")
+            except OperationalError as exc:
+                if not self._is_retryable_lease_error(exc):
+                    raise
+                if time.monotonic() >= deadline:
+                    raise TimeoutError(f"timed out acquiring session lease for {stream_id}") from exc
             if lease is None:
                 if time.monotonic() >= deadline:
                     raise TimeoutError(f"timed out acquiring session lease for {stream_id}")
@@ -693,6 +698,19 @@ class SessionStore:
             or float(row["lease_until"]) <= time.time()
         ):
             raise RuntimeError("session command lease is no longer valid")
+
+    @staticmethod
+    def _is_retryable_lease_error(error: OperationalError) -> bool:
+        message = str(error).lower()
+        return any(
+            marker in message
+            for marker in (
+                "database is locked",
+                "deadlock",
+                "serialization failure",
+                "could not serialize",
+            )
+        )
 
 class SessionCommandCoordinator:
     """Append explicit commands as events, then synchronously project them."""

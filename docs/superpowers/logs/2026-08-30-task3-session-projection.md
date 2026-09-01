@@ -278,3 +278,12 @@ session 的租约；Coordinator owner_id 使用进程号加随机 UUID，避免�
 - unscoped SessionStore 只接受严格的 `session:<id>`，不再从任意复合字符串中截取
   session 后缀；
 - 内部 storage session key 保持不变，已有 session snapshot 和 lease 无需迁移。
+
+## 租约数据库错误分类
+
+日期：2026-09-01
+
+- lease insert 的唯一键竞争继续作为并发抢占重试；
+- OperationalError 只对数据库锁、死锁和序列化冲突执行有限重试；
+- 缺表、SQL 不兼容、权限等永久错误立即保留原异常抛出，不再等待默认 30 秒后
+  伪装成 lease timeout。
