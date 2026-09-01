@@ -491,6 +491,26 @@ class SessionStore:
         try:
             return MemoryOperation.model_validate(raw_operation)
         except Exception as exc:
+            # Events written before the caller-supplied identity restriction may
+            # contain a memory_id on REMEMBER/UPDATE. Validate every other field
+            # through the current model, then preserve that historical identity
+            # solely for deterministic replay.
+            operation_name = raw_operation.get("operation")
+            if operation_name in {
+                OperationType.REMEMBER.value,
+                OperationType.UPDATE.value,
+            } and raw_operation.get("memory_id") is not None:
+                legacy_operation = dict(raw_operation)
+                legacy_memory_id = legacy_operation.pop("memory_id")
+                try:
+                    validated = MemoryOperation.model_validate(legacy_operation)
+                    values = validated.model_dump()
+                    values["memory_id"] = UUID(str(legacy_memory_id))
+                    return MemoryOperation.model_construct(
+                        **values,
+                    )
+                except Exception:
+                    pass
             raise ValueError("memory.command event contains an invalid operation") from exc
 
     @staticmethod
@@ -615,6 +635,19 @@ class SessionStore:
                 f"memweave:session-memory:{source_event_id_value}",
             )
         )
+        conflicting_id = next(
+            (
+                item
+                for item in state.active_memories
+                if item.id == record_id
+                and (existing is None or item.key != existing.key)
+            ),
+            None,
+        )
+        if conflicting_id is not None:
+            raise ValueError(
+                f"memory_id {record_id} is already used by key {conflicting_id.key!r}"
+            )
         record_times = {}
         if created_at is not None:
             record_times["created_at"] = created_at

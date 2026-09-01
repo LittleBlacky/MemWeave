@@ -8,7 +8,7 @@ from sqlalchemy.exc import OperationalError
 
 from memweave.db import Database
 from memweave.events import EventStore
-from memweave.models import EventType, MemoryOperation, MemoryScope, OperationType
+from memweave.models import Event, EventType, MemoryOperation, MemoryScope, OperationType
 from memweave.policy import ExplicitOperationParser, ParseContext
 from memweave.session import SessionCommandCoordinator, SessionStore
 from memweave.storage.sqlalchemy import SQLAlchemyDatabase
@@ -179,6 +179,75 @@ def test_remember_rejects_caller_supplied_memory_id(tmp_path):
 
     assert events.last_seq("session:s1") == 0
     assert sessions.get("s1").active_memories == []
+
+
+def test_legacy_remember_event_with_memory_id_can_be_replayed(tmp_path):
+    sessions = SessionStore(Database(str(tmp_path / "memory.db")))
+    legacy_id = uuid4()
+    event = Event(
+        event_type=EventType.MEMORY_COMMAND,
+        stream_id="session:s1",
+        seq=1,
+        actor="user:u1",
+        payload={
+            "operation": {
+                "operation": "remember",
+                "scope": "session",
+                "scope_id": "s1",
+                "key": "editor",
+                "value": "Vim",
+                "memory_id": str(legacy_id),
+            }
+        },
+    )
+
+    state = sessions.apply_event(event)
+
+    assert state.last_seq == 1
+    assert state.active_memories[0].id == legacy_id
+
+
+def test_legacy_memory_id_collision_fails_without_advancing_watermark(tmp_path):
+    sessions = SessionStore(Database(str(tmp_path / "memory.db")))
+    legacy_id = uuid4()
+    first = Event(
+        event_type=EventType.MEMORY_COMMAND,
+        stream_id="session:s1",
+        seq=1,
+        actor="user:u1",
+        payload={
+            "operation": {
+                "operation": "remember",
+                "scope": "session",
+                "scope_id": "s1",
+                "key": "editor",
+                "value": "Vim",
+                "memory_id": str(legacy_id),
+            }
+        },
+    )
+    second = Event(
+        event_type=EventType.MEMORY_COMMAND,
+        stream_id="session:s1",
+        seq=2,
+        actor="user:u1",
+        payload={
+            "operation": {
+                "operation": "remember",
+                "scope": "session",
+                "scope_id": "s1",
+                "key": "language",
+                "value": "Python",
+                "memory_id": str(legacy_id),
+            }
+        },
+    )
+    sessions.apply_event(first)
+
+    with pytest.raises(ValueError, match="memory_id"):
+        sessions.apply_event(second)
+
+    assert sessions.get("s1").last_seq == 1
 
 
 def test_scope_mismatch_is_rejected_before_event_append(tmp_path):
