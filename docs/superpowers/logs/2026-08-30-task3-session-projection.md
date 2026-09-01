@@ -320,3 +320,15 @@ session 的租约；Coordinator owner_id 使用进程号加随机 UUID，避免�
   `MemoryRecord` 并验证删除结果不会复活。
 
 TDD 验证：Task 3 会话操作、协调器和读取屏障测试 33 passed。
+
+## 限制调用方覆盖会话记忆身份
+
+日期：2026-09-01
+
+- `MemoryOperation` 现在拒绝 REMEMBER/UPDATE 携带 `memory_id`；新会话记忆的身份仅由
+  权威事件 ID 确定性派生，UPDATE 则沿用当前记忆的身份。
+- `memory_id` 仅作为 FORGET 的可选定位条件，避免两个不同 key 被调用方赋予同一 ID，
+  导致按 ID 删除依赖内部列表顺序而只删除其中一个。
+- 新增调用方为 REMEMBER 指定 ID 的拒绝测试，确认事件与会话投影均不会写入。
+
+TDD 验证：模型与 Task 3 会话测试 42 passed。

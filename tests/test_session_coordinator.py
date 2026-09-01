@@ -161,6 +161,26 @@ def test_full_rebuild_preserves_memory_id_for_id_based_forget(tmp_path):
     assert rebuilt_state.active_memories == []
 
 
+def test_remember_rejects_caller_supplied_memory_id(tmp_path):
+    database = Database(str(tmp_path / "memory.db"))
+    events = EventStore(database)
+    sessions = SessionStore(database)
+    coordinator = SessionCommandCoordinator(events, sessions)
+
+    with pytest.raises(ValueError, match="memory_id"):
+        MemoryOperation(
+            operation=OperationType.REMEMBER,
+            scope=MemoryScope.SESSION,
+            scope_id="s1",
+            key="language",
+            value="Python",
+            memory_id=uuid4(),
+        )
+
+    assert events.last_seq("session:s1") == 0
+    assert sessions.get("s1").active_memories == []
+
+
 def test_scope_mismatch_is_rejected_before_event_append(tmp_path):
     database = Database(str(tmp_path / "memory.db"))
     events = EventStore(database)

@@ -137,6 +137,8 @@ class MemoryOperation(BaseModel):
             raise ValueError("FORGET requires memory_id or key")
         if self.operation in (OperationType.REMEMBER, OperationType.UPDATE) and self.key is None:
             raise ValueError("remember/update requires key")
+        if self.operation in (OperationType.REMEMBER, OperationType.UPDATE) and self.memory_id is not None:
+            raise ValueError("remember/update must not provide memory_id")
         return self
 
 
