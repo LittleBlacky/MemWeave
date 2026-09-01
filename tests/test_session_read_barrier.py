@@ -11,6 +11,7 @@ from memweave.session import (
 from memweave.storage.checkpoints import RelationalProjectionCheckpointStore
 from memweave.storage.coordinator import ProjectionDispatcher
 from memweave.storage.recovery import ProjectionRuntime
+from memweave.storage.sqlalchemy import SQLAlchemyDatabase
 
 
 def append_messages(event_store, count):
@@ -169,3 +170,13 @@ def test_read_barrier_returns_local_state_when_target_watermark_is_unavailable(t
     assert result.lagging is False
     assert result.degraded is True
     assert result.error == "event authority unavailable"
+
+
+def test_session_projection_health_reports_missing_schema(tmp_path):
+    database = SQLAlchemyDatabase(f"sqlite+pysqlite:///{tmp_path / 'unmigrated.db'}")
+    sessions = SessionStore(database)
+    dispatcher = ProjectionDispatcher()
+    dispatcher.register_backend(SessionProjectionBackend(sessions))
+
+    assert dispatcher.health() == {"session": False}
+    assert "no such table" in dispatcher.errors()["__system__"]["session"]

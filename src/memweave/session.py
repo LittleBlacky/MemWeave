@@ -101,6 +101,8 @@ class SessionProjectionBackend:
         self.session_store.apply_event(event)
 
     def health(self) -> bool:
+        with self.session_store.database.read() as connection:
+            connection.execute(select(session_states_table.c.session_id).limit(1))
         return True
 
     def watermark(self, stream_id: str) -> int:

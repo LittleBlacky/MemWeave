@@ -296,3 +296,12 @@ session 的租约；Coordinator owner_id 使用进程号加随机 UUID，避免�
 - EventStore 暂时不可用时仍返回本地 SessionState，`requested_seq` 回落为当前
   `applied_seq`，并设置 `degraded=True` 和错误信息；
 - 此时 `lagging=False` 仅表示没有已知缺口，不能解释为已确认追平权威事件流。
+
+## Session projection 健康检查
+
+日期：2026-09-01
+
+- `SessionProjectionBackend.health()` 不再无条件返回 True；
+- 健康检查通过只读查询验证数据库连接和 `session_states` 表可用；
+- 异常交由 ProjectionDispatcher 统一转换为 `False` 并保留具体错误，检查过程不执行
+  migration 或隐式修复。
