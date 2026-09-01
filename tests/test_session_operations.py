@@ -297,3 +297,19 @@ def test_tenant_session_store_rejects_foreign_stream_id(tmp_path):
 
     with pytest.raises(ValueError, match="tenant"):
         store.apply_event(event)
+
+
+def test_unscoped_session_store_rejects_tenant_streams(tmp_path):
+    store = SessionStore(Database(str(tmp_path / "memory.db")))
+    event = Event(
+        event_type=EventType.USER_MESSAGE,
+        stream_id="tenant:tenant-a:session:s1",
+        seq=1,
+        actor="user:a",
+        payload={"text": "A"},
+    )
+
+    with pytest.raises(ValueError, match="tenant-scoped"):
+        store.apply_event(event)
+
+    assert store.get("s1").last_seq == 0

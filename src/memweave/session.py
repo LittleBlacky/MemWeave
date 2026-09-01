@@ -642,6 +642,8 @@ class SessionStore:
             if not stream_id.startswith(prefix):
                 raise ValueError("stream_id does not match configured tenant")
             session_id = stream_id[len(prefix) :]
+        elif stream_id.startswith("tenant:"):
+            raise ValueError("tenant stream_id requires a tenant-scoped SessionStore")
         elif marker in stream_id:
             session_id = stream_id.rsplit(marker, 1)[1]
         else:

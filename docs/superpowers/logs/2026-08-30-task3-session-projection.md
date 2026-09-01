@@ -257,3 +257,12 @@ TDD 验证：版本回退与独立 SessionStore 实例租约测试加入；相�
 session 的租约；Coordinator owner_id 使用进程号加随机 UUID，避免实例标识碰撞。
 
 最终 TDD 验证：Task 3/Task 2 相关测试 79 passed，核心回归集合 110 passed。
+
+## 未配置租户时拒绝 tenant stream
+
+日期：2026-09-01
+
+- 未配置 `tenant_id` 的 SessionStore 只用于全局/单租户 `session:<id>` stream；
+- 对 `tenant:<tenant_id>:session:<id>` 输入直接拒绝，防止不同租户的同名 session
+  被错误折叠到全局 `session_id`；
+- 多租户路径必须显式创建 tenant-scoped SessionStore。
