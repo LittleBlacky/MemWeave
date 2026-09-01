@@ -1,6 +1,7 @@
 """Synchronous session projection for current working memory."""
 
 import json
+import logging
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -27,6 +28,9 @@ from .models import (
     OperationType,
 )
 from .storage.schema import session_command_leases_table, session_states_table
+
+
+logger = logging.getLogger(__name__)
 
 
 def _json_default(value: Any) -> str:
@@ -197,6 +201,8 @@ class SessionStore:
         self.tenant_id = tenant_id
         self._command_locks: WeakValueDictionary[str, RLock] = WeakValueDictionary()
         self._command_locks_guard = Lock()
+        self._lease_release_errors: dict[str, str] = {}
+        self._lease_release_errors_guard = Lock()
 
     @contextmanager
     def command_lock(self, stream_id: str):
@@ -301,18 +307,42 @@ class SessionStore:
                 if time.monotonic() >= deadline:
                     raise TimeoutError(f"timed out acquiring session lease for {stream_id}")
                 time.sleep(min(poll_interval, max(0.0, deadline - time.monotonic())))
+        body_error: BaseException | None = None
         try:
             yield lease
+        except BaseException as exc:
+            body_error = exc
+            raise
         finally:
-            with self.database.begin() as connection:
-                connection.execute(
-                    update(session_command_leases_table).where(
-                        session_command_leases_table.c.session_id
-                        == storage_session_id,
-                        session_command_leases_table.c.owner_id == owner_id,
-                        session_command_leases_table.c.fencing_token == lease.fencing_token,
-                    ).values(lease_until=0.0)
+            try:
+                with self.database.begin() as connection:
+                    connection.execute(
+                        update(session_command_leases_table).where(
+                            session_command_leases_table.c.session_id
+                            == storage_session_id,
+                            session_command_leases_table.c.owner_id == owner_id,
+                            session_command_leases_table.c.fencing_token
+                            == lease.fencing_token,
+                        ).values(lease_until=0.0)
+                    )
+            except Exception as release_error:
+                message = str(release_error) or type(release_error).__name__
+                with self._lease_release_errors_guard:
+                    self._lease_release_errors[stream_id] = message
+                logger.exception(
+                    "failed to release session command lease for %s", stream_id
                 )
+                if body_error is not None:
+                    body_error.add_note(f"session lease release failed: {message}")
+            else:
+                with self._lease_release_errors_guard:
+                    self._lease_release_errors.pop(stream_id, None)
+
+    def lease_release_errors(self) -> dict[str, str]:
+        """Return release failures that may leave leases active until expiry."""
+
+        with self._lease_release_errors_guard:
+            return dict(self._lease_release_errors)
 
     def apply_event(self, event: Event, *, lease: SessionLease | None = None) -> SessionState:
         if not isinstance(event, Event):

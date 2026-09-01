@@ -1,4 +1,5 @@
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 import time
 from threading import Event as ThreadEvent, Lock
 from uuid import uuid4
@@ -11,6 +12,7 @@ from memweave.events import EventStore
 from memweave.models import Event, EventType, MemoryOperation, MemoryScope, OperationType
 from memweave.policy import ExplicitOperationParser, ParseContext
 from memweave.session import SessionCommandCoordinator, SessionStore
+from memweave.storage.schema import session_command_leases_table
 from memweave.storage.sqlalchemy import SQLAlchemyDatabase
 
 
@@ -22,6 +24,39 @@ def remember(scope_id="s1", key="database.engine", value="PostgreSQL"):
         key=key,
         value=value,
     )
+
+
+class ReleaseFailingDatabase:
+    def __init__(self, database):
+        self.database = database
+        self.fail_release = True
+
+    @contextmanager
+    def begin(self):
+        with self.database.begin() as connection:
+            yield ReleaseFailingConnection(connection, self)
+
+    def read(self):
+        return self.database.read()
+
+
+class ReleaseFailingConnection:
+    def __init__(self, connection, database):
+        self.connection = connection
+        self.database = database
+
+    def execute(self, statement, *args, **kwargs):
+        if (
+            self.database.fail_release
+            and getattr(statement, "is_update", False)
+            and getattr(getattr(statement, "table", None), "name", None)
+            == session_command_leases_table.name
+        ):
+            raise RuntimeError("lease release unavailable")
+        return self.connection.execute(statement, *args, **kwargs)
+
+    def __getattr__(self, name):
+        return getattr(self.connection, name)
 
 
 def test_coordinator_appends_authoritative_event_before_projecting(tmp_path):
@@ -484,3 +519,68 @@ def test_command_lease_does_not_mask_permanent_database_errors(tmp_path):
             "session:s1", owner_id="process-a", wait_timeout=0
         ):
             raise AssertionError("lease must not be acquired")
+
+
+def test_lease_release_failure_does_not_mask_successful_command(tmp_path):
+    durable_database = Database(str(tmp_path / "memory.db"))
+    database = ReleaseFailingDatabase(durable_database)
+    events = EventStore(database)
+    sessions = SessionStore(database)
+    coordinator = SessionCommandCoordinator(events, sessions)
+
+    result = coordinator.append_explicit(
+        remember(),
+        stream_id="session:s1",
+        actor="user:u1",
+        request_id=uuid4(),
+    )
+
+    assert result.event.seq == 1
+    assert result.state.active_memories[0].value == "PostgreSQL"
+    assert sessions.lease_release_errors()["session:s1"] == "lease release unavailable"
+
+
+def test_lease_release_failure_does_not_mask_projection_error(tmp_path):
+    durable_database = Database(str(tmp_path / "memory.db"))
+    database = ReleaseFailingDatabase(durable_database)
+    events = EventStore(database)
+    sessions = SessionStore(database)
+    coordinator = SessionCommandCoordinator(events, sessions)
+
+    def fail_projection(*_args, **_kwargs):
+        raise RuntimeError("projection unavailable")
+
+    sessions.apply_event = fail_projection
+
+    with pytest.raises(RuntimeError, match="projection unavailable") as raised:
+        coordinator.append_explicit(
+            remember(),
+            stream_id="session:s1",
+            actor="user:u1",
+            request_id=uuid4(),
+        )
+
+    assert any("lease release unavailable" in note for note in raised.value.__notes__)
+    assert sessions.lease_release_errors()["session:s1"] == "lease release unavailable"
+
+
+def test_successful_lease_release_clears_previous_diagnostic(tmp_path):
+    durable_database = Database(str(tmp_path / "memory.db"))
+    database = ReleaseFailingDatabase(durable_database)
+    sessions = SessionStore(database)
+
+    with sessions.command_lease(
+        "session:s1",
+        owner_id="process-a",
+        lease_seconds=0.01,
+    ):
+        pass
+
+    assert "session:s1" in sessions.lease_release_errors()
+
+    database.fail_release = False
+    time.sleep(0.03)
+    with sessions.command_lease("session:s1", owner_id="process-b"):
+        pass
+
+    assert sessions.lease_release_errors() == {}

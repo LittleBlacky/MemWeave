@@ -389,3 +389,21 @@ TDD 验证：历史事件兼容与 Task 3 会话测试通过。
   stream；没有扩展事件的普通 canonical session 继续保留。
 
 TDD 验证：旧库恢复定向测试通过。
+
+## Lease 释放异常不掩盖命令结果
+
+日期：2026-09-02
+
+- 修复事件与 SessionStore 投影已成功后，`command_lease()` 的 finally 释放失败覆盖成功
+  返回值，导致调用方误判失败并可能在无 idempotency key 时重复提交的问题。
+- 命令主体成功时，释放错误记录到日志和 `SessionStore.lease_release_errors()`，命令仍返回
+  已提交事件与投影状态；租约随后通过过期时间自然失效。
+- 命令主体失败时保留原始异常，并通过 exception note 附加 lease 释放失败信息，不再用
+  清理异常替换真正的投影错误。
+- 后续成功释放同一 stream 的 lease 会清除对应诊断。
+- 新增成功命令释放失败、投影失败同时释放失败，以及后续成功释放清除诊断三类故障
+  注入测试。
+
+TDD 验证：协调器定向测试 20 passed，Task 3 相关回归 99 passed，排除用户未跟踪
+`tests/test_session_consistency.py` 后的完整仓库测试 129 passed；`compileall` 与
+`git diff --check` 通过。
