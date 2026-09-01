@@ -45,6 +45,7 @@ def test_sqlite_database_migrations_are_versioned_and_idempotent(tmp_path):
         "0004_session_states",
         "0005_session_command_leases",
         "0006_session_stream_identity",
+        "0007_session_stream_recovery",
     ]
 
 
@@ -58,6 +59,7 @@ def test_default_migration_runner_discovers_packaged_migrations():
         "0004_session_states",
         "0005_session_command_leases",
         "0006_session_stream_identity",
+        "0007_session_stream_recovery",
     ]
 
 
@@ -99,6 +101,7 @@ def test_generic_sqlalchemy_database_can_apply_core_migration(tmp_path):
         "0004_session_states",
         "0005_session_command_leases",
         "0006_session_stream_identity",
+        "0007_session_stream_recovery",
     ]
     assert database.applied_migrations() == [
         "0001_core",
@@ -107,6 +110,7 @@ def test_generic_sqlalchemy_database_can_apply_core_migration(tmp_path):
         "0004_session_states",
         "0005_session_command_leases",
         "0006_session_stream_identity",
+        "0007_session_stream_recovery",
     ]
 
 
@@ -126,6 +130,12 @@ def test_stream_identity_migration_upgrades_legacy_session_tables(tmp_path):
         connection.exec_driver_sql(
             "CREATE TABLE schema_migrations (version VARCHAR(255) PRIMARY KEY, applied_at VARCHAR(64) NOT NULL)"
         )
+        connection.exec_driver_sql(
+            "CREATE TABLE events (stream_id VARCHAR(255) NOT NULL)"
+        )
+        connection.exec_driver_sql(
+            "CREATE TABLE projection_watermarks (projection VARCHAR(255) NOT NULL, stream_id VARCHAR(255) NOT NULL, last_seq INTEGER NOT NULL)"
+        )
         connection.execute(
             text(
                 "INSERT INTO schema_migrations(version, applied_at) VALUES "
@@ -135,7 +145,10 @@ def test_stream_identity_migration_upgrades_legacy_session_tables(tmp_path):
             )
         )
 
-    assert database.apply_migrations() == ["0006_session_stream_identity"]
+    assert database.apply_migrations() == [
+        "0006_session_stream_identity",
+        "0007_session_stream_recovery",
+    ]
     with database.read() as connection:
         assert "stream_id" in {
             column["name"]
@@ -145,6 +158,86 @@ def test_stream_identity_migration_upgrades_legacy_session_tables(tmp_path):
             column["name"]
             for column in inspect(connection).get_columns("session_command_leases")
         }
+
+
+def test_stream_recovery_migration_resets_only_ambiguous_sessions(tmp_path):
+    database = SQLAlchemyDatabase(f"sqlite+pysqlite:///{tmp_path / 'recovery.db'}")
+    with database.begin() as connection:
+        connection.exec_driver_sql(
+            "CREATE TABLE session_states ("
+            "session_id VARCHAR(255) PRIMARY KEY, stream_id VARCHAR(512), "
+            "last_seq INTEGER NOT NULL, recent_messages_json TEXT NOT NULL, "
+            "active_memories_json TEXT NOT NULL)"
+        )
+        connection.exec_driver_sql(
+            "CREATE TABLE session_command_leases ("
+            "session_id VARCHAR(255) PRIMARY KEY, stream_id VARCHAR(512), "
+            "owner_id VARCHAR(255) NOT NULL, lease_until FLOAT NOT NULL, "
+            "fencing_token INTEGER NOT NULL)"
+        )
+        connection.exec_driver_sql(
+            "CREATE TABLE schema_migrations (version VARCHAR(255) PRIMARY KEY, applied_at VARCHAR(64) NOT NULL)"
+        )
+        connection.exec_driver_sql(
+            "CREATE TABLE events (stream_id VARCHAR(255) NOT NULL)"
+        )
+        connection.exec_driver_sql(
+            "CREATE TABLE projection_watermarks (projection VARCHAR(255) NOT NULL, stream_id VARCHAR(255) NOT NULL, last_seq INTEGER NOT NULL)"
+        )
+        connection.execute(
+            text(
+                "INSERT INTO schema_migrations(version, applied_at) VALUES "
+                "('0001_core', 'now'), ('0002_outbox', 'now'), "
+                "('0003_outbox_consumer_receipts', 'now'), ('0004_session_states', 'now'), "
+                "('0005_session_command_leases', 'now'), "
+                "('0006_session_stream_identity', 'now')"
+            )
+        )
+        connection.exec_driver_sql(
+            "INSERT INTO session_states(session_id, last_seq, recent_messages_json, active_memories_json) "
+            "VALUES ('stream:legacy', 3, '[]', '[]'), "
+            "('t:session:s', 3, '[]', '[]'), "
+            "('t:session:plain', 2, '[]', '[]')"
+        )
+        connection.exec_driver_sql(
+            "INSERT INTO session_command_leases(session_id, owner_id, lease_until, fencing_token) "
+            "VALUES ('stream:legacy', 'old', 0, 1)"
+        )
+        connection.exec_driver_sql(
+            "INSERT INTO projection_watermarks(projection, stream_id, last_seq) VALUES "
+            "('custom-session', 'tenant:t/project:p/session:s', 3), "
+            "('custom-session', 'tenant:t/session:s', 3), "
+            "('other', 'unrelated:stream', 7)"
+        )
+        connection.exec_driver_sql(
+            "INSERT INTO events(stream_id) VALUES "
+            "('tenant:t/project:p/session:s'), ('tenant:t/session:s'), "
+            "('tenant:t/session:plain')"
+        )
+
+    assert database.apply_migrations() == ["0007_session_stream_recovery"]
+    with database.read() as connection:
+        assert connection.execute(
+            text("SELECT COUNT(*) FROM session_states WHERE session_id = 'stream:legacy'")
+        ).scalar_one() == 0
+        assert connection.execute(
+            text("SELECT COUNT(*) FROM session_command_leases WHERE session_id = 'stream:legacy'")
+        ).scalar_one() == 0
+        assert connection.execute(
+            text(
+                "SELECT COUNT(*) FROM projection_watermarks "
+                "WHERE stream_id IN ('tenant:t/project:p/session:s', 'tenant:t/session:s')"
+            )
+        ).scalar_one() == 0
+        assert connection.execute(
+            text("SELECT COUNT(*) FROM session_states WHERE session_id = 't:session:s'")
+        ).scalar_one() == 0
+        assert connection.execute(
+            text("SELECT COUNT(*) FROM session_states WHERE session_id = 't:session:plain'")
+        ).scalar_one() == 1
+        assert connection.execute(
+            text("SELECT last_seq FROM projection_watermarks WHERE projection = 'other'")
+        ).scalar_one() == 7
 
 
 def test_generic_sqlalchemy_database_migrations_are_safe_under_concurrent_startup(tmp_path):
@@ -158,7 +251,7 @@ def test_generic_sqlalchemy_database_migrations_are_safe_under_concurrent_startu
     with ThreadPoolExecutor(max_workers=8) as executor:
         results = list(executor.map(apply_migrations, range(8)))
 
-    assert sum(result == ["0001_core", "0002_outbox", "0003_outbox_consumer_receipts", "0004_session_states", "0005_session_command_leases", "0006_session_stream_identity"] for result in results) == 1
+    assert sum(result == ["0001_core", "0002_outbox", "0003_outbox_consumer_receipts", "0004_session_states", "0005_session_command_leases", "0006_session_stream_identity", "0007_session_stream_recovery"] for result in results) == 1
     assert sum(result == [] for result in results) == 7
     assert database.apply_migrations() == []
     assert database.applied_migrations() == [
@@ -168,6 +261,7 @@ def test_generic_sqlalchemy_database_migrations_are_safe_under_concurrent_startu
         "0004_session_states",
         "0005_session_command_leases",
         "0006_session_stream_identity",
+        "0007_session_stream_recovery",
     ]
 
 

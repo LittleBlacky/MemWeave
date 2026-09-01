@@ -367,3 +367,21 @@ TDD 验证：Task 3 会话操作、协调器和读取屏障测试 36 passed。
 - 新增旧格式 REMEMBER 重放和历史 ID 冲突回归测试。
 
 TDD 验证：历史事件兼容与 Task 3 会话测试通过。
+
+## Legacy 扩展投影的可执行恢复
+
+日期：2026-09-01
+
+- 修复 legacy 扩展快照虽然报告 `replay required`，但 `apply_event()` 重放第一条事件时
+  仍读取同一旧行并再次失败，导致恢复永久卡死的问题。
+- `0007_session_stream_recovery` 会根据权威 `events.stream_id` 找出存在 project 等扩展
+  scope 的 session，清理无法确认归属的旧 hash/canonical 快照、旧 lease，以及这些完整
+  stream 在所有 projection 名称下的 checkpoint，强制恢复从 seq=1 开始。
+- 没有扩展事件的普通 canonical session 不会被清理；迁移不猜测旧内容属于哪个 project。
+- 作为滚动升级防御，若迁移后仍遇到无完整身份的 legacy hash 行，只有 seq=1 重放可以
+  原子覆盖为新格式；普通读取和 seq>1 继续拒绝。
+- 新增旧库选择性清理、自定义 projection checkpoint 和 seq=1 重建回归测试。
+- 恢复清理使用独立 `0007`，不修改已经发布的 `0006`，确保已执行过 stream identity
+  migration 的数据库也会得到恢复修复。
+
+TDD 验证：旧库恢复定向测试通过。

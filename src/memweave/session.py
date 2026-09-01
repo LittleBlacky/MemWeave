@@ -330,7 +330,11 @@ class SessionStore:
             if lease is not None:
                 self._assert_lease(connection, storage_session_id, lease)
             state = self._read(
-                connection, storage_session_id, session_id, stream_id=event.stream_id
+                connection,
+                storage_session_id,
+                session_id,
+                stream_id=event.stream_id,
+                allow_legacy_replay=event.seq == 1,
             )
             if event.seq <= state.last_seq:
                 return state
@@ -694,6 +698,7 @@ class SessionStore:
         logical_session_id: str,
         *,
         stream_id: str | None = None,
+        allow_legacy_replay: bool = False,
     ) -> SessionState:
         row = connection.execute(
             select(session_states_table).where(
@@ -705,6 +710,8 @@ class SessionStore:
         expected_stream_id = stream_id or f"session:{logical_session_id}"
         persisted_stream_id = row.get("stream_id")
         if persisted_stream_id is None and storage_session_id.startswith("stream:"):
+            if allow_legacy_replay:
+                return SessionState(session_id=logical_session_id)
             raise RuntimeError(
                 "legacy extended session projection has no stream identity; replay required"
             )

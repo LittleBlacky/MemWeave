@@ -382,3 +382,44 @@ def test_legacy_extended_snapshot_requires_replay(tmp_path):
 
     with pytest.raises(RuntimeError, match="replay required"):
         store.get("s1", stream_id=stream_id)
+
+
+def test_legacy_extended_snapshot_rebuild_starts_only_at_sequence_one(tmp_path):
+    database = Database(str(tmp_path / "memory.db"))
+    store = SessionStore(database, tenant_id="tenant-a")
+    stream_id = "tenant:tenant-a/project:p1/session:s1"
+    stream_identity = uuid5(NAMESPACE_URL, f"memweave:session-stream:{stream_id}")
+    storage_id = f"stream:{stream_identity}"
+    with database.begin() as connection:
+        connection.execute(
+            session_states_table.insert().values(
+                session_id=storage_id,
+                last_seq=2,
+                recent_messages_json="[]",
+                active_memories_json="[]",
+            )
+        )
+
+    with pytest.raises(RuntimeError, match="replay required"):
+        store.apply_event(
+            Event(
+                event_type=EventType.USER_MESSAGE,
+                stream_id=stream_id,
+                seq=2,
+                actor="user:a",
+                payload={"text": "replay-2"},
+            )
+        )
+
+    first = store.apply_event(
+        Event(
+            event_type=EventType.USER_MESSAGE,
+            stream_id=stream_id,
+            seq=1,
+            actor="user:a",
+            payload={"text": "replay-1"},
+        )
+    )
+    assert first.last_seq == 1
+    assert first.recent_messages[0]["payload"]["text"] == "replay-1"
+    assert store.get("s1", stream_id=stream_id).recent_messages == first.recent_messages
