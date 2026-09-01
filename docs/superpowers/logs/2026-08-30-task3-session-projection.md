@@ -383,5 +383,9 @@ TDD 验证：历史事件兼容与 Task 3 会话测试通过。
 - 新增旧库选择性清理、自定义 projection checkpoint 和 seq=1 重建回归测试。
 - 恢复清理使用独立 `0007`，不修改已经发布的 `0006`，确保已执行过 stream identity
   migration 的数据库也会得到恢复修复。
+- 补充修复 `0006` 与 `0007` 之间的升级窗口：canonical 快照即使已被新代码回填非空
+  `stream_id`，其内容仍可能包含旧 project 数据。因此，只要权威事件日志确认存在扩展
+  stream，`0007` 就无条件清理对应 canonical 快照和租约，再分别重放 canonical/project
+  stream；没有扩展事件的普通 canonical session 继续保留。
 
 TDD 验证：旧库恢复定向测试通过。

@@ -55,13 +55,11 @@ def upgrade(connection: Connection) -> None:
         connection.execute(
             delete(session_command_leases_table).where(
                 session_command_leases_table.c.session_id.in_(canonical_storage_ids),
-                session_command_leases_table.c.stream_id.is_(None),
             )
         )
         connection.execute(
             delete(session_states_table).where(
                 session_states_table.c.session_id.in_(canonical_storage_ids),
-                session_states_table.c.stream_id.is_(None),
             )
         )
 

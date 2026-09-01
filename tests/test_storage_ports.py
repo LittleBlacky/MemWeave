@@ -194,14 +194,16 @@ def test_stream_recovery_migration_resets_only_ambiguous_sessions(tmp_path):
             )
         )
         connection.exec_driver_sql(
-            "INSERT INTO session_states(session_id, last_seq, recent_messages_json, active_memories_json) "
-            "VALUES ('stream:legacy', 3, '[]', '[]'), "
-            "('t:session:s', 3, '[]', '[]'), "
-            "('t:session:plain', 2, '[]', '[]')"
+            "INSERT INTO session_states(session_id, stream_id, last_seq, recent_messages_json, active_memories_json) "
+            "VALUES ('stream:legacy', NULL, 3, '[]', '[]'), "
+            "('t:session:s', 'tenant:t/session:s', 3, "
+            "'[{\"payload\":{\"text\":\"project data\"}}]', '[]'), "
+            "('t:session:plain', 'tenant:t/session:plain', 2, '[]', '[]')"
         )
         connection.exec_driver_sql(
-            "INSERT INTO session_command_leases(session_id, owner_id, lease_until, fencing_token) "
-            "VALUES ('stream:legacy', 'old', 0, 1)"
+            "INSERT INTO session_command_leases(session_id, stream_id, owner_id, lease_until, fencing_token) "
+            "VALUES ('stream:legacy', NULL, 'old', 0, 1), "
+            "('t:session:s', 'tenant:t/session:s', 'new', 10, 2)"
         )
         connection.exec_driver_sql(
             "INSERT INTO projection_watermarks(projection, stream_id, last_seq) VALUES "
@@ -231,6 +233,9 @@ def test_stream_recovery_migration_resets_only_ambiguous_sessions(tmp_path):
         ).scalar_one() == 0
         assert connection.execute(
             text("SELECT COUNT(*) FROM session_states WHERE session_id = 't:session:s'")
+        ).scalar_one() == 0
+        assert connection.execute(
+            text("SELECT COUNT(*) FROM session_command_leases WHERE session_id = 't:session:s'")
         ).scalar_one() == 0
         assert connection.execute(
             text("SELECT COUNT(*) FROM session_states WHERE session_id = 't:session:plain'")
