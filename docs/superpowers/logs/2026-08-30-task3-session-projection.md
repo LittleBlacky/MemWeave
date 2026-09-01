@@ -287,3 +287,12 @@ session 的租约；Coordinator owner_id 使用进程号加随机 UUID，避免�
 - OperationalError 只对数据库锁、死锁和序列化冲突执行有限重试；
 - 缺表、SQL 不兼容、权限等永久错误立即保留原异常抛出，不再等待默认 30 秒后
   伪装成 lease timeout。
+
+## 目标水位不可用时的读取降级
+
+日期：2026-09-01
+
+- `SessionReadBarrier` 现在同时处理 `target_seq()` 权威水位查询失败；
+- EventStore 暂时不可用时仍返回本地 SessionState，`requested_seq` 回落为当前
+  `applied_seq`，并设置 `degraded=True` 和错误信息；
+- 此时 `lagging=False` 仅表示没有已知缺口，不能解释为已确认追平权威事件流。

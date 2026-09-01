@@ -145,14 +145,23 @@ class SessionReadBarrier:
                 raise TypeError("target_seq must be an integer")
             if target_seq < 0:
                 raise ValueError("target_seq must not be negative")
-        requested_seq = (
-            target_seq
-            if target_seq is not None
-            else self.runtime.target_seq(resolved_stream)
-        )
         state = self.session_store.get(session_id)
         degraded = False
         error = None
+        if target_seq is None:
+            try:
+                requested_seq = self.runtime.target_seq(resolved_stream)
+            except Exception as exc:
+                return SessionReadResult(
+                    state=state,
+                    requested_seq=state.last_seq,
+                    applied_seq=state.last_seq,
+                    lagging=False,
+                    degraded=True,
+                    error=str(exc),
+                )
+        else:
+            requested_seq = target_seq
         if state.last_seq < requested_seq:
             try:
                 self.runtime.catch_up(resolved_stream, requested_seq)

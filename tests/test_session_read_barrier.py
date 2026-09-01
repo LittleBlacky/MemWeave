@@ -145,3 +145,27 @@ def test_read_barrier_depends_on_catchup_contract_not_runtime_internals(tmp_path
     assert catchup.calls == [("session:s1", 3)]
     assert result.applied_seq == 3
     assert result.lagging is False
+
+
+def test_read_barrier_returns_local_state_when_target_watermark_is_unavailable(tmp_path):
+    database = Database(str(tmp_path / "memory.db"))
+    event_store = EventStore(database)
+    event = append_messages(event_store, 1)[0]
+    sessions = SessionStore(database)
+    sessions.apply_event(event)
+
+    class UnavailableTarget:
+        def target_seq(self, stream_id):
+            raise RuntimeError("event authority unavailable")
+
+        def catch_up(self, stream_id, target_seq):
+            raise AssertionError("catch_up must not run without a target")
+
+    result = SessionReadBarrier(sessions, UnavailableTarget()).read("s1")
+
+    assert result.state.last_seq == 1
+    assert result.requested_seq == 1
+    assert result.applied_seq == 1
+    assert result.lagging is False
+    assert result.degraded is True
+    assert result.error == "event authority unavailable"
