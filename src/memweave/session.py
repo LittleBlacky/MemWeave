@@ -201,7 +201,7 @@ class SessionStore:
         self.tenant_id = tenant_id
         self._command_locks: WeakValueDictionary[str, RLock] = WeakValueDictionary()
         self._command_locks_guard = Lock()
-        self._lease_release_errors: dict[str, str] = {}
+        self._lease_release_errors: dict[str, tuple[int, str]] = {}
         self._lease_release_errors_guard = Lock()
 
     @contextmanager
@@ -316,7 +316,7 @@ class SessionStore:
         finally:
             try:
                 with self.database.begin() as connection:
-                    connection.execute(
+                    released = connection.execute(
                         update(session_command_leases_table).where(
                             session_command_leases_table.c.session_id
                             == storage_session_id,
@@ -325,24 +325,41 @@ class SessionStore:
                             == lease.fencing_token,
                         ).values(lease_until=0.0)
                     )
+                    if released.rowcount != 1:
+                        logger.warning(
+                            "session command lease for %s is no longer owned by %s",
+                            stream_id,
+                            owner_id,
+                        )
             except Exception as release_error:
                 message = str(release_error) or type(release_error).__name__
                 with self._lease_release_errors_guard:
-                    self._lease_release_errors[stream_id] = message
+                    previous = self._lease_release_errors.get(stream_id)
+                    if previous is None or lease.fencing_token >= previous[0]:
+                        self._lease_release_errors[stream_id] = (
+                            lease.fencing_token,
+                            message,
+                        )
                 logger.exception(
                     "failed to release session command lease for %s", stream_id
                 )
                 if body_error is not None:
                     body_error.add_note(f"session lease release failed: {message}")
             else:
-                with self._lease_release_errors_guard:
-                    self._lease_release_errors.pop(stream_id, None)
+                if released.rowcount == 1:
+                    with self._lease_release_errors_guard:
+                        previous = self._lease_release_errors.get(stream_id)
+                        if previous is None or previous[0] <= lease.fencing_token:
+                            self._lease_release_errors.pop(stream_id, None)
 
     def lease_release_errors(self) -> dict[str, str]:
         """Return release failures that may leave leases active until expiry."""
 
         with self._lease_release_errors_guard:
-            return dict(self._lease_release_errors)
+            return {
+                stream_id: message
+                for stream_id, (_fencing_token, message) in self._lease_release_errors.items()
+            }
 
     def apply_event(self, event: Event, *, lease: SessionLease | None = None) -> SessionState:
         if not isinstance(event, Event):

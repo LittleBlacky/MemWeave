@@ -584,3 +584,30 @@ def test_successful_lease_release_clears_previous_diagnostic(tmp_path):
         pass
 
     assert sessions.lease_release_errors() == {}
+
+
+def test_stale_lease_release_does_not_clear_newer_diagnostic(tmp_path):
+    durable_database = Database(str(tmp_path / "memory.db"))
+    database = ReleaseFailingDatabase(durable_database)
+    sessions = SessionStore(database)
+
+    first = sessions.command_lease(
+        "session:s1",
+        owner_id="process-a",
+        lease_seconds=0.01,
+    )
+    first.__enter__()
+    time.sleep(0.03)
+
+    database.fail_release = False
+    second = sessions.command_lease("session:s1", owner_id="process-b")
+    second.__enter__()
+
+    database.fail_release = True
+    second.__exit__(None, None, None)
+    assert sessions.lease_release_errors()["session:s1"] == "lease release unavailable"
+
+    database.fail_release = False
+    first.__exit__(None, None, None)
+
+    assert sessions.lease_release_errors()["session:s1"] == "lease release unavailable"

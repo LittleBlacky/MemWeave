@@ -407,3 +407,19 @@ TDD 验证：旧库恢复定向测试通过。
 TDD 验证：协调器定向测试 20 passed，Task 3 相关回归 99 passed，排除用户未跟踪
 `tests/test_session_consistency.py` 后的完整仓库测试 129 passed；`compileall` 与
 `git diff --check` 通过。
+
+## 过期 Lease 释放的 fencing 诊断保护
+
+日期：2026-09-02
+
+- 修复旧 fencing token 释放时条件更新影响行数为 0，却被误判为成功并清除较新租约诊断
+  的问题。
+- Lease 释放现在检查条件更新的 `rowcount`；旧 token 只记录告警，不会覆盖或清除较新
+  token 的释放错误。
+- 内部诊断携带 fencing token，公开的 `lease_release_errors()` 仍返回 stream 到错误消息
+  的稳定格式。
+- 新增旧租约晚到释放不影响新租约诊断的并发时序测试。
+
+TDD 验证：协调器定向测试 21 passed，Task 3 相关回归 100 passed，排除用户未跟踪
+`tests/test_session_consistency.py` 后的完整仓库测试 130 passed；`compileall` 与
+`git diff --check` 通过。
