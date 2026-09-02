@@ -56,6 +56,16 @@ session_states_table = Table(
     Column("active_memories_json", Text, nullable=False),
 )
 
+session_event_receipts_table = Table(
+    "session_event_receipts",
+    metadata,
+    Column("session_id", String(255), nullable=False),
+    Column("seq", Integer, nullable=False),
+    Column("event_id", String(36), nullable=False),
+    Column("fingerprint", String(64), nullable=False),
+    UniqueConstraint("session_id", "seq", name="pk_session_event_receipts"),
+)
+
 session_command_leases_table = Table(
     "session_command_leases",
     metadata,

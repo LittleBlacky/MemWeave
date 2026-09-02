@@ -423,3 +423,21 @@ TDD 验证：协调器定向测试 20 passed，Task 3 相关回归 99 passed，�
 TDD 验证：协调器定向测试 21 passed，Task 3 相关回归 100 passed，排除用户未跟踪
 `tests/test_session_consistency.py` 后的完整仓库测试 130 passed；`compileall` 与
 `git diff --check` 通过。
+
+## 拒绝冲突的会话事件序号
+
+日期：2026-09-03
+
+- 新增 `session_event_receipts`，在会话投影事务中记录每个已应用序号对应的
+  `event_id` 和不可变事件指纹；同一 `(session, seq)` 重放相同事件保持幂等，内容不同
+  时抛出 `ProjectionConflictError`，不再静默返回旧快照。
+- `memory.command` 的事件收据与会话状态在同一事务提交，冲突或操作失败都不会推进
+  会话水位，也不会产生重复 active memory。
+- 新增 `0008_session_event_receipts` 迁移。升级旧库时仅为快照 `last_seq` 以内且事件表字段
+  完整的历史事件回填收据；无法安全判断归属或字段不完整时跳过，交由权威事件流重放。
+- 收据缺失但快照已越过该序号时 fail closed，返回明确的 `replay required`，避免损坏状态
+  被当成成功读取。
+- `ProjectionConflictError` 同时继承领域错误和 `ValueError`，兼容既有调用方的校验捕获。
+
+TDD 验证：Task 3 会话、协调器、读取屏障和迁移定向测试 91 passed；用户未跟踪的
+`tests/test_session_consistency.py` 仍有既有的乱序投影与 parser 期望失败，未修改。

@@ -15,3 +15,7 @@ class AuthorizationError(MemWeaveError):
 
 class StaleWriteError(MemWeaveError):
     """Raised when an update is based on an old memory version."""
+
+
+class ProjectionConflictError(MemWeaveError, ValueError):
+    """Raised when an applied stream sequence is reused for different content."""

@@ -4,6 +4,7 @@ from uuid import NAMESPACE_URL, uuid4, uuid5
 import pytest
 
 from memweave.db import Database
+from memweave.events import EventStore
 from memweave.errors import StaleWriteError
 from memweave.models import (
     Event,
@@ -17,7 +18,12 @@ from memweave.models import (
     OperationType,
 )
 from memweave.session import SessionStore
-from memweave.storage.schema import session_states_table
+from memweave.storage.schema import (
+    schema_migrations_table,
+    session_event_receipts_table,
+    session_states_table,
+)
+from sqlalchemy import delete
 
 
 def operation(operation_type, *, key, value=None, expected_version=None):
@@ -284,6 +290,107 @@ def test_session_projection_normalizes_json_payload_at_write_boundary(tmp_path):
         "occurred_at": str(occurred),
     }
     assert store.get("s1").recent_messages == state.recent_messages
+
+
+def test_same_sequence_conflicting_event_is_rejected(tmp_path):
+    store = SessionStore(Database(str(tmp_path / "memory.db")))
+    first = Event(
+        event_type=EventType.USER_MESSAGE,
+        stream_id="session:s1",
+        seq=1,
+        actor="user:a",
+        payload={"text": "original"},
+    )
+    conflict = Event(
+        event_type=EventType.USER_MESSAGE,
+        stream_id="session:s1",
+        seq=1,
+        actor="user:b",
+        payload={"text": "conflict"},
+    )
+
+    store.apply_event(first)
+
+    with pytest.raises(ValueError, match="conflicting event"):
+        store.apply_event(conflict)
+
+
+def test_same_sequence_conflict_is_detected_after_database_reopen(tmp_path):
+    path = tmp_path / "memory.db"
+    first = Event(
+        event_type=EventType.USER_MESSAGE,
+        stream_id="session:s1",
+        seq=1,
+        actor="user:a",
+        payload={"text": "original"},
+    )
+    SessionStore(Database(str(path))).apply_event(first)
+
+    conflict = Event(
+        event_type=EventType.USER_MESSAGE,
+        stream_id="session:s1",
+        seq=1,
+        actor="user:b",
+        payload={"text": "conflict"},
+    )
+    reopened = SessionStore(Database(str(path)))
+
+    with pytest.raises(ValueError, match="conflicting event"):
+        reopened.apply_event(conflict)
+
+
+def test_receipts_are_backfilled_for_applied_events_on_migration_retry(tmp_path):
+    path = str(tmp_path / "memory.db")
+    database = Database(path)
+    events = EventStore(database)
+    event = events.append(
+        "session:s1",
+        EventType.USER_MESSAGE,
+        {"text": "original"},
+        "user:a",
+        request_id=uuid4(),
+    )
+    SessionStore(database).apply_event(event)
+
+    with database.begin() as connection:
+        connection.execute(
+            delete(session_event_receipts_table).where(
+                session_event_receipts_table.c.session_id == "s1"
+            )
+        )
+        connection.execute(
+            delete(schema_migrations_table).where(
+                schema_migrations_table.c.version == "0008_session_event_receipts"
+            )
+        )
+
+    assert database.apply_migrations() == ["0008_session_event_receipts"]
+    conflict = event.model_copy(update={"actor": "user:b", "payload": {"text": "conflict"}})
+    with pytest.raises(ValueError, match="conflicting event"):
+        SessionStore(database).apply_event(conflict)
+
+
+def test_missing_receipt_for_applied_sequence_fails_closed(tmp_path):
+    path = str(tmp_path / "memory.db")
+    database = Database(path)
+    event = Event(
+        event_type=EventType.USER_MESSAGE,
+        stream_id="session:s1",
+        seq=1,
+        actor="user:a",
+        payload={"text": "original"},
+    )
+    store = SessionStore(database)
+    store.apply_event(event)
+    with database.begin() as connection:
+        connection.execute(
+            delete(session_event_receipts_table).where(
+                session_event_receipts_table.c.session_id == "s1"
+            )
+        )
+
+    with pytest.raises(RuntimeError, match="receipt is missing.*replay required"):
+        store.apply_event(event)
 
 
 def test_tenant_session_store_rejects_foreign_stream_id(tmp_path):
