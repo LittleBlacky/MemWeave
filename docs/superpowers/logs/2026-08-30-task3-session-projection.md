@@ -560,3 +560,19 @@ TDD 验证：恢复、存储端口和 Session Task 3 定向测试 `82 passed`；
   增加 `list_until` 或流式 receipt 审计接口，降低一次性内存和延迟成本。
 
 TDD 验证：恢复与存储端口测试 `64 passed`；`compileall` 和 `git diff --check` 通过。
+
+## 校验 session receipt 回填的事件连续性
+
+日期：2026-09-03
+
+- 发现 `0008_session_event_receipts` 只筛选 `seq <= last_seq`，事件流缺少中间序号时仍会
+  为后续事件写入 receipt，导致 session 水位看起来已覆盖但实际存在缺口。
+- 新增 `0011_validate_session_receipts`，按 `0008` 的 canonical、tenant 和扩展 stream
+  归一化规则审计每个已有 session 快照；事件序列必须严格覆盖 `1..last_seq`。
+- 已有 receipt 必须与权威事件的 `event_id` 和 fingerprint 一致；缺失 receipt 才允许补写，
+  缺口、重复序号、身份冲突或非法 checkpoint 都 fail closed。
+- 迁移依赖 MigrationRunner 的单事务语义，校验失败会回滚本轮所有补写和 migration 标记，
+  不删除事件、不伪造 receipt，等待人工修复或从权威事件流重放。
+
+TDD 验证：新增 session receipt 缺口回归测试；Task 3 定向测试、全量回归、`compileall` 和
+`git diff --check` 在本轮收尾执行。

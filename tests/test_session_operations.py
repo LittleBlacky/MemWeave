@@ -19,11 +19,12 @@ from memweave.models import (
 )
 from memweave.session import SessionStore
 from memweave.storage.schema import (
+    events_table,
     schema_migrations_table,
     session_event_receipts_table,
     session_states_table,
 )
-from sqlalchemy import delete
+from sqlalchemy import delete, select
 
 
 def operation(operation_type, *, key, value=None, expected_version=None):
@@ -365,6 +366,7 @@ def test_receipts_are_backfilled_for_applied_events_on_migration_retry(tmp_path)
                         "0008_session_event_receipts",
                         "0009_projection_event_receipts",
                         "0010_validate_projection_receipts",
+                        "0011_validate_session_receipts",
                     ]
                 )
             )
@@ -374,10 +376,72 @@ def test_receipts_are_backfilled_for_applied_events_on_migration_retry(tmp_path)
         "0008_session_event_receipts",
         "0009_projection_event_receipts",
         "0010_validate_projection_receipts",
+        "0011_validate_session_receipts",
     ]
     conflict = event.model_copy(update={"actor": "user:b", "payload": {"text": "conflict"}})
     with pytest.raises(ValueError, match="conflicting event"):
         SessionStore(database).apply_event(conflict)
+
+
+def test_session_receipt_backfill_rejects_incomplete_event_stream(tmp_path):
+    database = Database(str(tmp_path / "session-receipt-gap.db"))
+    events = EventStore(database)
+    for text in ("one", "two", "three"):
+        event = events.append(
+            "session:s1",
+            EventType.USER_MESSAGE,
+            {"text": text},
+            "user:a",
+            request_id=uuid4(),
+        )
+        SessionStore(database).apply_event(event)
+
+    with database.begin() as connection:
+        connection.execute(
+            delete(events_table).where(
+                events_table.c.stream_id == "session:s1",
+                events_table.c.seq == 2,
+            )
+        )
+        connection.execute(
+            delete(session_event_receipts_table).where(
+                session_event_receipts_table.c.session_id == "s1"
+            )
+        )
+        connection.execute(
+            delete(schema_migrations_table).where(
+                schema_migrations_table.c.version.in_(
+                    [
+                        "0008_session_event_receipts",
+                        "0009_projection_event_receipts",
+                        "0010_validate_projection_receipts",
+                        "0011_validate_session_receipts",
+                    ]
+                )
+            )
+        )
+
+    with pytest.raises(ValueError, match="incomplete event stream"):
+        database.apply_migrations()
+
+    with database.read() as connection:
+        assert connection.execute(
+            select(session_event_receipts_table.c.seq).where(
+                session_event_receipts_table.c.session_id == "s1"
+            )
+        ).scalars().all() == []
+        assert connection.execute(
+            select(schema_migrations_table.c.version).where(
+                schema_migrations_table.c.version.in_(
+                    [
+                        "0008_session_event_receipts",
+                        "0009_projection_event_receipts",
+                        "0010_validate_projection_receipts",
+                        "0011_validate_session_receipts",
+                    ]
+                )
+            )
+        ).scalars().all() == []
 
 
 def test_snapshot_behind_existing_receipt_can_be_rebuilt(tmp_path):
