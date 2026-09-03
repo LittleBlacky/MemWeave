@@ -69,6 +69,26 @@ def test_duplicate_event_id_is_idempotent_and_payload_is_immutable(tmp_path):
         )
 
 
+def test_find_existing_event_supports_event_and_idempotency_lookup(tmp_path):
+    store = EventStore(Database(str(tmp_path / "events.db")))
+    event_id = uuid4()
+    event = store.append(
+        "session:s1",
+        EventType.USER_MESSAGE,
+        {"text": "hello"},
+        "user:u1",
+        request_id=uuid4(),
+        event_id=event_id,
+        idempotency_key="message-1",
+    )
+
+    assert store.find_existing("session:s1", event_id=event_id) == event
+    assert store.find_existing(
+        "session:s1", idempotency_key="message-1"
+    ) == event
+    assert store.find_existing("session:s1", idempotency_key="missing") is None
+
+
 def test_duplicate_event_id_rejects_a_different_occurred_at(tmp_path):
     store = EventStore(Database(str(tmp_path / "events.db")))
     event_id = uuid4()

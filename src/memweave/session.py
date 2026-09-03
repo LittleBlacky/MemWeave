@@ -1152,9 +1152,18 @@ class SessionCommandCoordinator:
             with self.session_store.command_lease(
                 stream_id, owner_id=self.owner_id
             ) as lease:
-                self.session_store.validate_operation(
-                    operation, stream_id=stream_id
-                )
+                existing_event = None
+                finder = getattr(self.event_store, "find_existing", None)
+                if callable(finder) and (event_id is not None or idempotency_key is not None):
+                    existing_event = finder(
+                        stream_id,
+                        event_id=event_id,
+                        idempotency_key=idempotency_key,
+                    )
+                if existing_event is None or existing_event.stream_id != stream_id:
+                    self.session_store.validate_operation(
+                        operation, stream_id=stream_id
+                    )
                 event = self.event_store.append(
                     stream_id=stream_id,
                     event_type=EventType.MEMORY_COMMAND,

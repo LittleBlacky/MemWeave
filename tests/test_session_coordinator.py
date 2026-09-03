@@ -170,6 +170,48 @@ def test_deterministically_invalid_command_is_rejected_before_append(tmp_path):
     assert result.event.seq == 1
 
 
+def test_replaying_idempotent_command_bypasses_current_state_preflight(tmp_path):
+    database = Database(str(tmp_path / "preflight-idempotency.db"))
+    events = EventStore(database)
+    sessions = SessionStore(database)
+    coordinator = SessionCommandCoordinator(events, sessions)
+
+    coordinator.append_explicit(
+        remember(key="editor", value="VS Code"),
+        stream_id="session:s1",
+        actor="user:u1",
+        request_id=uuid4(),
+    )
+    update = MemoryOperation(
+        operation=OperationType.UPDATE,
+        scope=MemoryScope.SESSION,
+        scope_id="s1",
+        key="editor",
+        value="PyCharm",
+        expected_version=1,
+    )
+    update_event_id = uuid4()
+    first = coordinator.append_explicit(
+        update,
+        stream_id="session:s1",
+        actor="user:u1",
+        request_id=uuid4(),
+        event_id=update_event_id,
+        idempotency_key="update-1",
+    )
+    replayed = coordinator.append_explicit(
+        update,
+        stream_id="session:s1",
+        actor="user:u1",
+        request_id=first.event.request_id,
+        event_id=update_event_id,
+        idempotency_key="update-1",
+    )
+
+    assert replayed.event == first.event
+    assert replayed.state == first.state
+
+
 def test_replaying_same_memory_command_event_is_idempotent(tmp_path):
     database = Database(str(tmp_path / "memory.db"))
     events = EventStore(database)

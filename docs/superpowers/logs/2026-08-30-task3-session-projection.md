@@ -658,3 +658,15 @@ TDD 验证：Session 操作、协调器和读取屏障定向测试 `54 passed`�
 - 屏障现在在重新读取快照后比较 `applied_seq` 与 `requested_seq`；仍落后时强制设置
   `lagging=True`、`degraded=True`，并返回明确的未追平错误。
 - 新增静默 catch-up 回归测试，确保不同 Runtime 实现不会绕过读取一致性契约。
+
+## 预检与幂等重试顺序
+
+日期：2026-09-04
+
+- 发现新增的命令预检如果先于幂等查询执行，同一 `event_id` 或
+  `idempotency_key` 的成功命令重试会因当前版本已递增而被误判为 stale。
+- `EventStore` 增加只读 `find_existing()` 查询；Coordinator 在预检前识别已存在的同一
+  stream 事件，再调用原有 `append()` 做完整不可变字段校验并重放投影。
+- 不带已有幂等身份的命令仍先做确定性预检；冲突 event 参数不会被绕过，仍由 EventStore
+  的 immutable/idempotency 校验拒绝。
+- 新增 EventStore 查询和 Coordinator 重试回归测试，确保幂等重试返回原事件和原状态。

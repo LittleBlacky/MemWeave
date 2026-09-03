@@ -240,6 +240,38 @@ class EventStore:
             ).scalar_one_or_none()
         return int(value or 0)
 
+    def find_existing(
+        self,
+        stream_id: str,
+        *,
+        event_id: Optional[UUID] = None,
+        idempotency_key: Optional[str] = None,
+    ) -> Event | None:
+        """Find an existing event for coordinator idempotency preflight."""
+
+        self._validate_stream_id(stream_id)
+        if event_id is None and idempotency_key is None:
+            raise ValueError("event_id or idempotency_key is required")
+        if event_id is not None and not isinstance(event_id, UUID):
+            raise TypeError("event_id must be a UUID")
+        if idempotency_key is not None:
+            if not isinstance(idempotency_key, str):
+                raise TypeError("idempotency_key must be a string")
+            if not idempotency_key.strip():
+                raise ValueError("idempotency_key must not be blank")
+        with self.database.read() as connection:
+            if event_id is not None:
+                statement = select(events_table).where(
+                    events_table.c.event_id == str(event_id)
+                )
+            else:
+                statement = select(events_table).where(
+                    events_table.c.stream_id == stream_id,
+                    events_table.c.idempotency_key == idempotency_key,
+                )
+            row = connection.execute(statement).mappings().first()
+        return None if row is None else self._row_to_event(row)
+
     @staticmethod
     def _validate_stream_id(stream_id: str) -> None:
         if not isinstance(stream_id, str):
