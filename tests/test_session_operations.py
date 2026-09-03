@@ -468,6 +468,52 @@ def test_snapshot_behind_existing_receipt_can_be_rebuilt(tmp_path):
     assert rebuilt.recent_messages[0]["payload"] == {"text": "original"}
 
 
+def test_session_store_rejects_new_event_when_receipt_prefix_is_incomplete(tmp_path):
+    database = Database(str(tmp_path / "runtime-receipt-gap.db"))
+    events = EventStore(database)
+    store = SessionStore(database)
+    projected = []
+    for text in ("one", "two"):
+        event = events.append(
+            "session:s1",
+            EventType.USER_MESSAGE,
+            {"text": text},
+            "user:a",
+            request_id=uuid4(),
+        )
+        store.apply_event(event)
+        projected.append(event)
+    next_event = events.append(
+        "session:s1",
+        EventType.USER_MESSAGE,
+        {"text": "three"},
+        "user:a",
+        request_id=uuid4(),
+    )
+    with database.begin() as connection:
+        connection.execute(
+            delete(session_event_receipts_table).where(
+                session_event_receipts_table.c.session_id == "s1",
+                session_event_receipts_table.c.seq == projected[0].seq,
+            )
+        )
+
+    with pytest.raises(RuntimeError, match="receipts are incomplete"):
+        store.apply_event(next_event)
+
+    with database.read() as connection:
+        assert connection.execute(
+            select(session_states_table.c.last_seq).where(
+                session_states_table.c.session_id == "s1"
+            )
+        ).scalar_one() == 2
+        assert connection.execute(
+            select(session_event_receipts_table.c.seq)
+            .where(session_event_receipts_table.c.session_id == "s1")
+            .order_by(session_event_receipts_table.c.seq)
+        ).scalars().all() == [2]
+
+
 def test_tenant_session_store_rejects_foreign_stream_id(tmp_path):
     store = SessionStore(Database(str(tmp_path / "memory.db")), tenant_id="tenant-a")
     event = Event(

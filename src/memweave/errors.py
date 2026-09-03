@@ -19,3 +19,7 @@ class StaleWriteError(MemWeaveError):
 
 class ProjectionConflictError(MemWeaveError, ValueError):
     """Raised when an applied stream sequence is reused for different content."""
+
+
+class SessionProjectionIntegrityError(MemWeaveError, RuntimeError):
+    """Raised when a session snapshot is not backed by a complete receipt chain."""

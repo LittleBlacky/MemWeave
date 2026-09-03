@@ -13,10 +13,14 @@ from typing import Any, Protocol
 from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 from weakref import WeakValueDictionary
 
-from sqlalchemy import insert, select, update
+from sqlalchemy import func, insert, select, update
 from sqlalchemy.exc import IntegrityError, OperationalError
 
-from .errors import ProjectionConflictError, StaleWriteError
+from .errors import (
+    ProjectionConflictError,
+    SessionProjectionIntegrityError,
+    StaleWriteError,
+)
 from .models import (
     Event,
     EventType,
@@ -158,35 +162,62 @@ class SessionReadBarrier:
                 raise TypeError("target_seq must be an integer")
             if target_seq < 0:
                 raise ValueError("target_seq must not be negative")
-        state = self.session_store.get(session_id, stream_id=resolved_stream)
+        integrity_error = None
+        try:
+            state = self.session_store.get(session_id, stream_id=resolved_stream)
+        except SessionProjectionIntegrityError as exc:
+            integrity_error = exc
+            state = self.session_store._get_unverified(
+                session_id, stream_id=resolved_stream
+            )
         degraded = False
         error = None
         if target_seq is None:
             try:
                 requested_seq = self.runtime.target_seq(resolved_stream)
             except Exception as exc:
+                target_error = str(exc)
+                if integrity_error is not None:
+                    target_error = f"{integrity_error}; {target_error}"
                 return SessionReadResult(
                     state=state,
                     requested_seq=state.last_seq,
                     applied_seq=state.last_seq,
-                    lagging=False,
+                    lagging=integrity_error is not None,
                     degraded=True,
-                    error=str(exc),
+                    error=target_error,
                 )
         else:
             requested_seq = target_seq
+        if integrity_error is not None:
+            return SessionReadResult(
+                state=state,
+                requested_seq=requested_seq,
+                applied_seq=state.last_seq,
+                lagging=True,
+                degraded=True,
+                error=str(integrity_error),
+            )
         if state.last_seq < requested_seq:
             try:
                 self.runtime.catch_up(resolved_stream, requested_seq)
             except Exception as exc:
                 degraded = True
                 error = str(exc)
-            state = self.session_store.get(session_id, stream_id=resolved_stream)
+            try:
+                state = self.session_store.get(session_id, stream_id=resolved_stream)
+            except SessionProjectionIntegrityError as exc:
+                state = self.session_store._get_unverified(
+                    session_id, stream_id=resolved_stream
+                )
+                degraded = True
+                error = str(exc)
+                integrity_error = exc
         return SessionReadResult(
             state=state,
             requested_seq=requested_seq,
             applied_seq=state.last_seq,
-            lagging=state.last_seq < requested_seq,
+            lagging=integrity_error is not None or state.last_seq < requested_seq,
             degraded=degraded,
             error=error,
         )
@@ -477,6 +508,25 @@ class SessionStore:
         with self.database.read() as connection:
             return self._read(
                 connection, storage_session_id, session_id, stream_id=resolved_stream
+            )
+
+    def _get_unverified(
+        self, session_id: str, *, stream_id: str | None = None
+    ) -> SessionState:
+        """Read a snapshot for degraded diagnostics without trusting its watermark."""
+
+        self._validate_session_id(session_id)
+        resolved_stream = stream_id or self.stream_id_for_session(session_id)
+        storage_session_id = self._storage_session_id(
+            session_id, stream_id=resolved_stream
+        )
+        with self.database.read() as connection:
+            return self._read(
+                connection,
+                storage_session_id,
+                session_id,
+                stream_id=resolved_stream,
+                validate_receipts=False,
             )
 
     def upsert_active(
@@ -797,6 +847,7 @@ class SessionStore:
         *,
         stream_id: str | None = None,
         allow_legacy_replay: bool = False,
+        validate_receipts: bool = True,
     ) -> SessionState:
         row = connection.execute(
             select(session_states_table).where(
@@ -815,12 +866,55 @@ class SessionStore:
             )
         if persisted_stream_id is not None and persisted_stream_id != expected_stream_id:
             raise RuntimeError("session projection stream identity mismatch")
-        return SessionState(
+        state = SessionState(
             session_id=logical_session_id,
             last_seq=int(row["last_seq"]),
             recent_messages=json.loads(row["recent_messages_json"]),
             active_memories=[MemoryRecord.model_validate(item) for item in json.loads(row["active_memories_json"])],
         )
+        if validate_receipts:
+            SessionStore._assert_receipt_prefix(
+                connection,
+                storage_session_id,
+                expected_stream_id,
+                state.last_seq,
+            )
+        return state
+
+    @staticmethod
+    def _assert_receipt_prefix(
+        connection,
+        storage_session_id: str,
+        stream_id: str,
+        through_seq: int,
+    ) -> None:
+        if through_seq < 0:
+            raise SessionProjectionIntegrityError(
+                "session projection has a negative watermark; replay required for "
+                f"stream_id={stream_id}, last_seq={through_seq}"
+            )
+        if through_seq == 0:
+            return
+        count, minimum, maximum = connection.execute(
+            select(
+                func.count(session_event_receipts_table.c.seq),
+                func.min(session_event_receipts_table.c.seq),
+                func.max(session_event_receipts_table.c.seq),
+            ).where(
+                session_event_receipts_table.c.session_id == storage_session_id,
+                session_event_receipts_table.c.seq <= through_seq,
+            )
+        ).one()
+        if (
+            int(count) != through_seq
+            or int(minimum or 0) != 1
+            or int(maximum or 0) != through_seq
+        ):
+            raise SessionProjectionIntegrityError(
+                "session event receipts are incomplete; replay required for "
+                f"stream_id={stream_id}, last_seq={through_seq}, "
+                f"receipt_count={count}, min_seq={minimum}, max_seq={maximum}"
+            )
 
     def _write(
         self,

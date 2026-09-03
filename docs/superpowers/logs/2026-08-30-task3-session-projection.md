@@ -576,3 +576,20 @@ TDD 验证：恢复与存储端口测试 `64 passed`；`compileall` 和 `git dif
 
 TDD 验证：新增 session receipt 缺口回归测试；Task 3 定向测试、全量回归、`compileall` 和
 `git diff --check` 在本轮收尾执行。
+
+## 运行期审计 session receipt 连续前缀
+
+日期：2026-09-03
+
+- 发现 session 快照已到 `last_seq=N` 后，若旧 receipt 因部分恢复或损坏而丢失，
+  `apply_event()` 只检查当前事件 receipt，仍可能继续推进水位并掩盖历史缺口。
+- SessionStore 统一读取路径现在要求 receipt 严格覆盖 `1..last_seq`；`get()`、新事件应用、
+  低层写入和 backend watermark 因此共享同一完整性规则，不会由某个入口绕过。
+- receipt 允许领先于快照，以支持旧快照从权威事件重放；但快照覆盖范围内缺失任何 receipt、
+  或快照水位为负数时，抛出 `SessionProjectionIntegrityError` 并拒绝推进。
+- SessionReadBarrier 捕获该明确的完整性错误，只把未验证快照作为诊断数据返回，同时设置
+  `degraded=True`、`lagging=True`，即使数值水位恰好等于权威目标也不宣称已追平。
+- 新增运行期删除旧 receipt 后继续投影和读取的回归测试，验证写事务不推进、读取不误报健康。
+
+TDD 验证：Session 操作、协调器和读取屏障定向测试 `54 passed`；排除用户未跟踪旧测试后
+完整回归 `148 passed`，`compileall` 和 `git diff --check` 通过。

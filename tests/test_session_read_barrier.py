@@ -11,7 +11,10 @@ from memweave.session import (
 from memweave.storage.checkpoints import RelationalProjectionCheckpointStore
 from memweave.storage.coordinator import ProjectionDispatcher
 from memweave.storage.recovery import ProjectionRuntime
-from memweave.storage.schema import session_states_table
+from memweave.storage.schema import (
+    session_event_receipts_table,
+    session_states_table,
+)
 from memweave.storage.sqlalchemy import SQLAlchemyDatabase
 from sqlalchemy import delete
 
@@ -194,6 +197,35 @@ def test_read_barrier_returns_local_state_when_target_watermark_is_unavailable(t
     assert result.lagging is False
     assert result.degraded is True
     assert result.error == "event authority unavailable"
+
+
+def test_read_barrier_reports_equal_numeric_watermark_as_degraded_when_receipts_are_incomplete(
+    tmp_path,
+):
+    database = Database(str(tmp_path / "receipt-gap.db"))
+    event_store = EventStore(database)
+    events = append_messages(event_store, 2)
+    sessions = SessionStore(database)
+    for event in events:
+        sessions.apply_event(event)
+    with database.begin() as connection:
+        connection.execute(
+            delete(session_event_receipts_table).where(
+                session_event_receipts_table.c.session_id == "s1",
+                session_event_receipts_table.c.seq == 1,
+            )
+        )
+
+    result = SessionReadBarrier(sessions, make_runtime(database, sessions, event_store)).read(
+        "s1"
+    )
+
+    assert result.requested_seq == 2
+    assert result.applied_seq == 2
+    assert result.lagging is True
+    assert result.degraded is True
+    assert "receipts are incomplete" in result.error
+    assert result.state.last_seq == 2
 
 
 def test_read_barrier_reads_the_requested_project_session_stream(tmp_path):
