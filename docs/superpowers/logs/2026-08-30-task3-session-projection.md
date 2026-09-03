@@ -659,6 +659,21 @@ TDD 验证：Session 操作、协调器和读取屏障定向测试 `54 passed`�
   `lagging=True`、`degraded=True`，并返回明确的未追平错误。
 - 新增静默 catch-up 回归测试，确保不同 Runtime 实现不会绕过读取一致性契约。
 
+## Task 3 收敛审查
+
+日期：2026-09-04
+
+- 按事件连续性、receipt 身份与前缀、快照事务、操作版本与记忆身份、租户 stream、
+  并发租约、Coordinator 幂等、读取屏障和恢复失败语义完成边界矩阵审查。
+- 本轮修复了空 stream 默认回退、非法租户分隔符、缺省 kind 重置、冲突 key/memory_id、
+  确定性无效命令毒事件、幂等预检顺序、已提交事件追平竞态和 Runtime 非法目标水位。
+- Task 3 定向集合最终 `66 passed`；排除用户未跟踪旧测试后的全量集合 `161 passed`；
+  `compileall`、`git diff --check` 均通过。
+- 用户未跟踪的 `tests/test_session_consistency.py` 仍有两个与严格现行契约冲突的旧断言：
+  它要求 SessionStore 接受乱序事件，并要求 Parser 固定生成 `expected_version=1`。
+  该文件未修改、未提交，不作为 Task 3 当前验收依据。
+- Task 3 核心范围已闭合；长期权威记忆、版本历史和 tombstone 按计划进入 Task 4。
+
 ## 校验 Runtime 返回的目标水位
 
 日期：2026-09-04
