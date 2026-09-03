@@ -246,6 +246,41 @@ def test_coordinator_catches_up_committed_events_before_appending_command(tmp_pa
     assert [item["seq"] for item in result.state.recent_messages] == [1, 2]
 
 
+def test_coordinator_recovers_append_race_with_a_new_committed_event(tmp_path):
+    database = Database(str(tmp_path / "append-race.db"))
+    events = EventStore(database)
+    sessions = SessionStore(database)
+    original_append = events.append
+    injected = False
+
+    def append_with_race(*args, **kwargs):
+        nonlocal injected
+        if not injected:
+            injected = True
+            original_append(
+                stream_id="session:s1",
+                event_type=EventType.USER_MESSAGE,
+                payload={"text": "committed during command append"},
+                actor="user:u1",
+                request_id=uuid4(),
+            )
+        return original_append(*args, **kwargs)
+
+    events.append = append_with_race
+    coordinator = SessionCommandCoordinator(events, sessions)
+
+    result = coordinator.append_explicit(
+        remember(key="database.engine", value="PostgreSQL"),
+        stream_id="session:s1",
+        actor="user:u1",
+        request_id=uuid4(),
+    )
+
+    assert result.event.seq == 2
+    assert result.state.last_seq == 2
+    assert result.state.active_memories[0].value == "PostgreSQL"
+
+
 def test_replaying_same_memory_command_event_is_idempotent(tmp_path):
     database = Database(str(tmp_path / "memory.db"))
     events = EventStore(database)

@@ -1165,6 +1165,17 @@ class SessionCommandCoordinator:
             for event in sorted(events, key=lambda item: item.seq):
                 self.session_store.apply_event(event, lease=lease)
 
+    def _apply_command_event(self, event: Event, lease: SessionLease) -> SessionState:
+        """Apply a command, repairing a race with events committed meanwhile."""
+
+        try:
+            return self.session_store.apply_event(event, lease=lease)
+        except ValueError as exc:
+            if not str(exc).startswith("session event sequence gap:"):
+                raise
+            self._catch_up_existing_events(event.stream_id, lease)
+            return self.session_store.apply_event(event, lease=lease)
+
     def append_explicit(
         self,
         operation: MemoryOperation,
@@ -1214,5 +1225,5 @@ class SessionCommandCoordinator:
                     idempotency_key=idempotency_key,
                     protocol_version=protocol_version,
                 )
-                state = self.session_store.apply_event(event, lease=lease)
+                state = self._apply_command_event(event, lease)
                 return SessionCommandResult(event=event, state=state)

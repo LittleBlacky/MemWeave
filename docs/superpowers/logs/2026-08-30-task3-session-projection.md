@@ -701,3 +701,13 @@ TDD 验证：Session 操作、协调器和读取屏障定向测试 `54 passed`�
 - `EventRepository` 现在明确要求 `append()`、`last_seq()`、`list_after()` 和
   `find_existing()`；`SessionCommandCoordinator` 在构造期检查四个方法，拒绝不完整适配器。
 - 失败事件测试适配完整契约，运行期行为保持：EventStore 不可用时不会创建会话状态。
+
+## 处理追加与投影之间的并发缺口
+
+日期：2026-09-04
+
+- 发现 Coordinator 完成前置追平后，其他写入者仍可能在命令追加前提交普通事件；
+  命令首次投影会遇到 sequence gap，即使事件已落库也无法返回成功。
+- 命令事件遇到明确的 sequence gap 时，现在在同一 lease 内从 EventStore 追平已提交前缀，
+  再重试该命令；非 gap 的业务错误不会被吞掉或重试。
+- 新增竞态回归测试，模拟普通事件在命令 append 内提交，验证命令最终 seq=2 且会话水位连续。
