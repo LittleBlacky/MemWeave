@@ -42,6 +42,15 @@ class EventRepository(Protocol):
     def last_seq(self, stream_id: str) -> int:
         ...
 
+    def find_existing(
+        self,
+        stream_id: str,
+        *,
+        event_id: UUID | None = None,
+        idempotency_key: str | None = None,
+    ) -> Event | None:
+        ...
+
 
 class ProjectionCheckpointStore(Protocol):
     def get(self, projection: str, stream_id: str) -> int:

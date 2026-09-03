@@ -1119,13 +1119,45 @@ class SessionCommandCoordinator:
     """Append explicit commands as events, then synchronously project them."""
 
     def __init__(self, event_store, session_store: SessionStore):
-        if not hasattr(event_store, "append"):
-            raise TypeError("event_store must provide append()")
+        missing = [
+            name
+            for name in ("append", "last_seq", "list_after", "find_existing")
+            if not callable(getattr(event_store, name, None))
+        ]
+        if missing:
+            raise TypeError(
+                "event_store must provide " + ", ".join(f"{name}()" for name in missing)
+            )
         if not isinstance(session_store, SessionStore):
             raise TypeError("session_store must be a SessionStore")
         self.event_store = event_store
         self.session_store = session_store
         self.owner_id = f"pid:{os.getpid()}:{uuid4()}"
+
+    def _catch_up_existing_events(self, stream_id: str, lease: SessionLease) -> None:
+        """Project committed events before allocating the next command sequence."""
+
+        last_seq = self.event_store.last_seq
+        list_after = self.event_store.list_after
+        session_id = self.session_store._session_id_from_stream(stream_id)
+        while True:
+            target_seq = last_seq(stream_id)
+            state = self.session_store.get(session_id, stream_id=stream_id)
+            if state.last_seq > target_seq:
+                raise RuntimeError(
+                    "session projection is ahead of event authority for "
+                    f"stream_id={stream_id}"
+                )
+            if state.last_seq == target_seq:
+                return
+            events = list_after(stream_id, state.last_seq)
+            if not events:
+                raise RuntimeError(
+                    "session projection cannot catch up to event authority for "
+                    f"stream_id={stream_id}, target_seq={target_seq}"
+                )
+            for event in sorted(events, key=lambda item: item.seq):
+                self.session_store.apply_event(event, lease=lease)
 
     def append_explicit(
         self,
@@ -1152,10 +1184,10 @@ class SessionCommandCoordinator:
             with self.session_store.command_lease(
                 stream_id, owner_id=self.owner_id
             ) as lease:
+                self._catch_up_existing_events(stream_id, lease)
                 existing_event = None
-                finder = getattr(self.event_store, "find_existing", None)
-                if callable(finder) and (event_id is not None or idempotency_key is not None):
-                    existing_event = finder(
+                if event_id is not None or idempotency_key is not None:
+                    existing_event = self.event_store.find_existing(
                         stream_id,
                         event_id=event_id,
                         idempotency_key=idempotency_key,

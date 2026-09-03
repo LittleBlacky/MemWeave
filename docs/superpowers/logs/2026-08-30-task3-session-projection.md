@@ -670,3 +670,24 @@ TDD 验证：Session 操作、协调器和读取屏障定向测试 `54 passed`�
 - 不带已有幂等身份的命令仍先做确定性预检；冲突 event 参数不会被绕过，仍由 EventStore
   的 immutable/idempotency 校验拒绝。
 - 新增 EventStore 查询和 Coordinator 重试回归测试，确保幂等重试返回原事件和原状态。
+
+## 命令追加前追平已提交事件
+
+日期：2026-09-04
+
+- 发现普通事件已落入 EventStore、但 SessionStore 尚未完成异步投影时，Coordinator
+  直接追加命令会分配更大的 seq；严格 SessionStore 会拒绝该命令并留下序号缺口。
+- Coordinator 在会话租约内使用 EventStore 的 `last_seq()`/`list_after()` 追平当前已提交
+  事件，再进行幂等查询、操作预检和新命令追加；追平失败时不追加新事件。
+- 追平仍通过 SessionStore 的严格事务入口执行，事件身份、receipt 和 lease 校验保持统一。
+- 新增回归测试验证已有 seq=1 普通事件未投影时，显式命令从 seq=2 追加并同步完成。
+
+## 收紧 Coordinator 的事件仓库契约
+
+日期：2026-09-04
+
+- Coordinator 的原始 duck typing 只检查 `append()`，无法保证命令前追平和幂等重试所需
+  的查询能力；缺失方法会把问题延迟到投影阶段。
+- `EventRepository` 现在明确要求 `append()`、`last_seq()`、`list_after()` 和
+  `find_existing()`；`SessionCommandCoordinator` 在构造期检查四个方法，拒绝不完整适配器。
+- 失败事件测试适配完整契约，运行期行为保持：EventStore 不可用时不会创建会话状态。

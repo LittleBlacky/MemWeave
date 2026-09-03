@@ -87,6 +87,15 @@ def test_event_store_failure_does_not_create_session_memory(tmp_path):
         def append(self, **_kwargs):
             raise RuntimeError("event store unavailable")
 
+        def last_seq(self, _stream_id):
+            return 0
+
+        def list_after(self, _stream_id, _seq):
+            return []
+
+        def find_existing(self, _stream_id, **_kwargs):
+            return None
+
     sessions = SessionStore(database)
     coordinator = SessionCommandCoordinator(FailingEventStore(), sessions)
 
@@ -210,6 +219,31 @@ def test_replaying_idempotent_command_bypasses_current_state_preflight(tmp_path)
 
     assert replayed.event == first.event
     assert replayed.state == first.state
+
+
+def test_coordinator_catches_up_committed_events_before_appending_command(tmp_path):
+    database = Database(str(tmp_path / "catchup-before-command.db"))
+    events = EventStore(database)
+    sessions = SessionStore(database)
+    events.append(
+        stream_id="session:s1",
+        event_type=EventType.USER_MESSAGE,
+        payload={"text": "already committed"},
+        actor="user:u1",
+        request_id=uuid4(),
+    )
+    coordinator = SessionCommandCoordinator(events, sessions)
+
+    result = coordinator.append_explicit(
+        remember(key="database.engine", value="PostgreSQL"),
+        stream_id="session:s1",
+        actor="user:u1",
+        request_id=uuid4(),
+    )
+
+    assert result.event.seq == 2
+    assert result.state.last_seq == 2
+    assert [item["seq"] for item in result.state.recent_messages] == [1, 2]
 
 
 def test_replaying_same_memory_command_event_is_idempotent(tmp_path):
