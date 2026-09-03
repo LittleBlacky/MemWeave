@@ -8,6 +8,7 @@ from memweave.events import EventStore
 from memweave.models import Event
 from memweave.storage.checkpoints import RelationalProjectionCheckpointStore
 from memweave.storage.coordinator import ProjectionDispatcher
+from memweave.storage.event_receipts import event_fingerprint
 from memweave.storage.sqlite import SQLiteDatabase
 
 
@@ -95,6 +96,22 @@ def test_projection_runtime_starts_replay_after_slowest_projection_checkpoint(tm
             self.start_seq = seq
             return self.events
 
+    source = RecordingSource()
+    checkpoint_store.save_receipt(
+        "fast",
+        "session:start",
+        4,
+        str(source.events[0].event_id),
+        event_fingerprint(source.events[0]),
+    )
+    checkpoint_store.save_receipt(
+        "fast",
+        "session:start",
+        5,
+        str(source.events[1].event_id),
+        event_fingerprint(source.events[1]),
+    )
+
     class NamedBackend(RecordingBackend):
         def __init__(self, name):
             super().__init__()
@@ -103,7 +120,6 @@ def test_projection_runtime_starts_replay_after_slowest_projection_checkpoint(tm
     dispatcher = ProjectionDispatcher(checkpoint_store=checkpoint_store)
     dispatcher.register_backend(NamedBackend("fast"))
     dispatcher.register_backend(NamedBackend("slow"))
-    source = RecordingSource()
     from memweave.storage.recovery import ProjectionRuntime
 
     assert ProjectionRuntime(dispatcher, source).recover("session:start") == 5

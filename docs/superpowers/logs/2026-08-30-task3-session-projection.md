@@ -441,3 +441,21 @@ TDD 验证：协调器定向测试 21 passed，Task 3 相关回归 100 passed，
 
 TDD 验证：Task 3 会话、协调器、读取屏障和迁移定向测试 91 passed；用户未跟踪的
 `tests/test_session_consistency.py` 仍有既有的乱序投影与 parser 期望失败，未修改。
+
+## 校验通用投影 checkpoint 的事件身份
+
+日期：2026-09-03
+
+- 修复 `ProjectionDispatcher` 在 `event.seq <= checkpoint` 快速路径中只比较序号、
+  静默跳过不同事件的问题。
+- 新增 `projection_event_receipts`，由关系型 checkpoint store 持久化每个 projection、
+  stream、seq 对应的 `event_id` 和事件指纹；已完成序号只有 receipt 完全一致时才可跳过。
+- receipt 缺失时 fail closed 并报告 `replay required`；receipt 冲突时报告明确的投影
+  冲突，不调用后端重复执行。
+- 新增 `0009_projection_event_receipts` 迁移，为已有 checkpoint 覆盖的权威事件回填 receipt，
+  对字段不完整的旧事件表安全跳过，并对迁移重试保持幂等。
+- 保留第三方旧 checkpoint 实现的兼容路径；实现严格跨进程校验的适配器应提供可选的
+  `get_receipt()` / `save_receipt()` 能力。
+
+TDD 验证：Dispatcher、Recovery、Session Task 3 定向测试通过；`compileall` 与
+`git diff --check` 待本轮收尾验证。

@@ -12,6 +12,7 @@ from memweave.models import Event
 from memweave.models import EventType
 from memweave.storage.checkpoints import RelationalProjectionCheckpointStore
 from memweave.storage.coordinator import ProjectionDispatcher, StorageCoordinator
+from memweave.storage.event_receipts import event_fingerprint
 from memweave.storage.migrations import MigrationRunner
 from memweave.storage.ports import EventProjector, EventRepository, ProjectionBackend, VectorIndex
 from memweave.storage.sqlalchemy import SQLAlchemyDatabase
@@ -47,6 +48,7 @@ def test_sqlite_database_migrations_are_versioned_and_idempotent(tmp_path):
         "0006_session_stream_identity",
         "0007_session_stream_recovery",
         "0008_session_event_receipts",
+        "0009_projection_event_receipts",
     ]
 
 
@@ -62,6 +64,7 @@ def test_default_migration_runner_discovers_packaged_migrations():
         "0006_session_stream_identity",
         "0007_session_stream_recovery",
         "0008_session_event_receipts",
+        "0009_projection_event_receipts",
     ]
 
 
@@ -105,6 +108,7 @@ def test_generic_sqlalchemy_database_can_apply_core_migration(tmp_path):
         "0006_session_stream_identity",
         "0007_session_stream_recovery",
         "0008_session_event_receipts",
+        "0009_projection_event_receipts",
     ]
     assert database.applied_migrations() == [
         "0001_core",
@@ -115,6 +119,7 @@ def test_generic_sqlalchemy_database_can_apply_core_migration(tmp_path):
         "0006_session_stream_identity",
         "0007_session_stream_recovery",
         "0008_session_event_receipts",
+        "0009_projection_event_receipts",
     ]
 
 
@@ -153,6 +158,7 @@ def test_stream_identity_migration_upgrades_legacy_session_tables(tmp_path):
         "0006_session_stream_identity",
         "0007_session_stream_recovery",
         "0008_session_event_receipts",
+        "0009_projection_event_receipts",
     ]
     with database.read() as connection:
         assert "stream_id" in {
@@ -222,7 +228,7 @@ def test_stream_recovery_migration_resets_only_ambiguous_sessions(tmp_path):
             "('tenant:t/session:plain')"
         )
 
-    assert database.apply_migrations() == ["0007_session_stream_recovery", "0008_session_event_receipts"]
+    assert database.apply_migrations() == ["0007_session_stream_recovery", "0008_session_event_receipts", "0009_projection_event_receipts"]
     with database.read() as connection:
         assert connection.execute(
             text("SELECT COUNT(*) FROM session_states WHERE session_id = 'stream:legacy'")
@@ -261,7 +267,7 @@ def test_generic_sqlalchemy_database_migrations_are_safe_under_concurrent_startu
     with ThreadPoolExecutor(max_workers=8) as executor:
         results = list(executor.map(apply_migrations, range(8)))
 
-    assert sum(result == ["0001_core", "0002_outbox", "0003_outbox_consumer_receipts", "0004_session_states", "0005_session_command_leases", "0006_session_stream_identity", "0007_session_stream_recovery", "0008_session_event_receipts"] for result in results) == 1
+    assert sum(result == ["0001_core", "0002_outbox", "0003_outbox_consumer_receipts", "0004_session_states", "0005_session_command_leases", "0006_session_stream_identity", "0007_session_stream_recovery", "0008_session_event_receipts", "0009_projection_event_receipts"] for result in results) == 1
     assert sum(result == [] for result in results) == 7
     assert database.apply_migrations() == []
     assert database.applied_migrations() == [
@@ -273,6 +279,7 @@ def test_generic_sqlalchemy_database_migrations_are_safe_under_concurrent_startu
         "0006_session_stream_identity",
         "0007_session_stream_recovery",
         "0008_session_event_receipts",
+        "0009_projection_event_receipts",
     ]
 
 
@@ -622,7 +629,8 @@ def test_projection_dispatcher_bounds_gap_pending_cache_and_supports_explicit_cl
             payload={},
         )
 
-    assert dispatcher.project(event(3)) == {"recording": 0}
+    third = event(3)
+    assert dispatcher.project(third) == {"recording": 0}
     assert dispatcher.project(event(4)) == {"recording": 0}
     assert dispatcher.project(event(5)) == {}
     assert "pending gap buffer full" in dispatcher.errors()["session:gap-limit"]["recording"]
@@ -821,6 +829,54 @@ def test_projection_dispatcher_rejects_conflicting_duplicate_pending_sequence(tm
     ]["recording"]
 
 
+def test_projection_dispatcher_rejects_conflicting_event_after_checkpoint(tmp_path):
+    database = SQLiteDatabase(str(tmp_path / "checkpoint-sequence-conflict.db"))
+    checkpoint_store = RelationalProjectionCheckpointStore(database)
+    dispatcher = ProjectionDispatcher(checkpoint_store=checkpoint_store)
+    backend = RecordingBackend()
+    dispatcher.register_backend(backend)
+
+    first = Event(
+        event_id=uuid4(),
+        event_type="code.test_passed",
+        stream_id="session:checkpoint-conflict",
+        seq=1,
+        actor="agent:codex",
+        payload={"value": "first"},
+    )
+    conflict = first.model_copy(
+        update={"event_id": uuid4(), "payload": {"value": "conflict"}}
+    )
+
+    assert dispatcher.project(first) == {"recording": 1}
+    assert dispatcher.project(conflict) == {}
+    assert "conflicting event for projection=recording" in dispatcher.errors()[
+        "session:checkpoint-conflict"
+    ]["recording"]
+    assert backend.events == [first.event_id]
+
+
+def test_projection_dispatcher_fails_closed_when_checkpoint_receipt_is_missing(tmp_path):
+    database = SQLiteDatabase(str(tmp_path / "checkpoint-missing-receipt.db"))
+    checkpoint_store = RelationalProjectionCheckpointStore(database)
+    dispatcher = ProjectionDispatcher(checkpoint_store=checkpoint_store)
+    dispatcher.register_backend(RecordingBackend())
+    event = Event(
+        event_id=uuid4(),
+        event_type="code.test_passed",
+        stream_id="session:missing-receipt",
+        seq=1,
+        actor="agent:codex",
+        payload={},
+    )
+
+    checkpoint_store.save_max("recording", event.stream_id, 1)
+    assert dispatcher.project(event) == {}
+    assert "checkpoint receipt is missing" in dispatcher.errors()[
+        event.stream_id
+    ]["recording"]
+
+
 def test_projection_dispatcher_clears_pending_events_covered_by_external_checkpoint(tmp_path):
     database = SQLiteDatabase(str(tmp_path / "pending-checkpoint-cleanup.db"))
     checkpoint_store = RelationalProjectionCheckpointStore(database)
@@ -838,12 +894,20 @@ def test_projection_dispatcher_clears_pending_events_covered_by_external_checkpo
             payload={"seq": seq},
         )
 
-    assert dispatcher.project(event(3)) == {"recording": 0}
+    third = event(3)
+    assert dispatcher.project(third) == {"recording": 0}
     assert dispatcher._pending_count == 1
 
+    checkpoint_store.save_receipt(
+        "recording",
+        "session:cleanup",
+        3,
+        str(third.event_id),
+        event_fingerprint(third),
+    )
     checkpoint_store.save_max("recording", "session:cleanup", 3)
 
-    assert dispatcher.project(event(1)) == {"recording": 3}
+    assert dispatcher.project(third) == {"recording": 3}
     assert dispatcher._pending == {}
     assert dispatcher._pending_count == 0
 

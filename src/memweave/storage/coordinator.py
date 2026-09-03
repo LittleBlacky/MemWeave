@@ -10,6 +10,8 @@ from typing import Dict, Tuple
 from weakref import WeakValueDictionary
 
 from ..models import Event
+from ..errors import ProjectionConflictError
+from .event_receipts import event_fingerprint
 from .ports import EventProjector, ProjectionCheckpointStore
 
 
@@ -69,6 +71,26 @@ class ProjectionDispatcher:
                     if self._checkpoint_store is not None:
                         checkpoint = self._checkpoint_store.get(name, event.stream_id)
                         if event.seq <= checkpoint:
+                            get_receipt = getattr(
+                                self._checkpoint_store, "get_receipt", None
+                            )
+                            if callable(get_receipt):
+                                receipt = get_receipt(name, event.stream_id, event.seq)
+                                if receipt is None:
+                                    raise RuntimeError(
+                                        "projection checkpoint receipt is missing; "
+                                        f"replay required for projection={name}, "
+                                        f"stream_id={event.stream_id}, seq={event.seq}"
+                                    )
+                                if receipt != (
+                                    str(event.event_id),
+                                    event_fingerprint(event),
+                                ):
+                                    raise ProjectionConflictError(
+                                        "conflicting event for "
+                                        f"projection={name}, stream_id={event.stream_id}, "
+                                        f"seq={event.seq}"
+                                    )
                             pending = self._pending.get((name, event.stream_id))
                             if pending:
                                 obsolete = [
@@ -122,6 +144,17 @@ class ProjectionDispatcher:
                             # same event a second time.
                             if backend.watermark(event.stream_id) < candidate.seq:
                                 backend.apply(candidate)
+                            save_receipt = getattr(
+                                self._checkpoint_store, "save_receipt", None
+                            )
+                            if callable(save_receipt):
+                                save_receipt(
+                                    name,
+                                    event.stream_id,
+                                    candidate.seq,
+                                    str(candidate.event_id),
+                                    event_fingerprint(candidate),
+                                )
                             self._checkpoint_store.save_max(
                                 name, event.stream_id, candidate.seq
                             )

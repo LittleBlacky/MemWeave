@@ -46,6 +46,22 @@ projection_watermarks_table = Table(
     UniqueConstraint("projection", "stream_id", name="pk_projection_watermarks"),
 )
 
+projection_event_receipts_table = Table(
+    "projection_event_receipts",
+    metadata,
+    Column("projection", String(255), nullable=False),
+    Column("stream_id", String(255), nullable=False),
+    Column("seq", Integer, nullable=False),
+    Column("event_id", String(36), nullable=False),
+    Column("fingerprint", String(64), nullable=False),
+    UniqueConstraint(
+        "projection",
+        "stream_id",
+        "seq",
+        name="pk_projection_event_receipts",
+    ),
+)
+
 session_states_table = Table(
     "session_states",
     metadata,

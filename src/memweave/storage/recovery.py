@@ -122,6 +122,10 @@ class ProjectionRuntime:
                     buffer.pop(event.seq, None)
                     with self._buffer_count_lock:
                         self._buffer_count -= 1
+                # A checkpoint fast-path error can occur even when the source
+                # has no events after the checkpoint (for example, a missing
+                # durable receipt). Do not mark such a stream READY silently.
+                self._raise_on_dispatch_error(stream_id)
                 if not self._covers_target_sequence(
                     start_seq, target_seq, set(replayed_events)
                 ):

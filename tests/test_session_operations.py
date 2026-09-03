@@ -360,11 +360,19 @@ def test_receipts_are_backfilled_for_applied_events_on_migration_retry(tmp_path)
         )
         connection.execute(
             delete(schema_migrations_table).where(
-                schema_migrations_table.c.version == "0008_session_event_receipts"
+                schema_migrations_table.c.version.in_(
+                    [
+                        "0008_session_event_receipts",
+                        "0009_projection_event_receipts",
+                    ]
+                )
             )
         )
 
-    assert database.apply_migrations() == ["0008_session_event_receipts"]
+    assert database.apply_migrations() == [
+        "0008_session_event_receipts",
+        "0009_projection_event_receipts",
+    ]
     conflict = event.model_copy(update={"actor": "user:b", "payload": {"text": "conflict"}})
     with pytest.raises(ValueError, match="conflicting event"):
         SessionStore(database).apply_event(conflict)

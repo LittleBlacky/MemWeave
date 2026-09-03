@@ -6,7 +6,7 @@ from sqlalchemy import insert, select, update
 from sqlalchemy.exc import IntegrityError, OperationalError
 
 from .ports import ProjectionCheckpointStore
-from .schema import projection_watermarks_table
+from .schema import projection_event_receipts_table, projection_watermarks_table
 
 
 class RelationalProjectionCheckpointStore(ProjectionCheckpointStore):
@@ -45,12 +45,79 @@ class RelationalProjectionCheckpointStore(ProjectionCheckpointStore):
 
         raise AssertionError("unreachable")
 
+    def get_receipt(
+        self, projection: str, stream_id: str, seq: int
+    ) -> tuple[str, str] | None:
+        self._validate_text(projection, "projection")
+        self._validate_text(stream_id, "stream_id")
+        self._validate_seq(seq)
+        with self.database.read() as connection:
+            row = connection.execute(
+                select(
+                    projection_event_receipts_table.c.event_id,
+                    projection_event_receipts_table.c.fingerprint,
+                ).where(
+                    projection_event_receipts_table.c.projection == projection,
+                    projection_event_receipts_table.c.stream_id == stream_id,
+                    projection_event_receipts_table.c.seq == seq,
+                )
+            ).first()
+        return None if row is None else (str(row[0]), str(row[1]))
+
+    def save_receipt(
+        self,
+        projection: str,
+        stream_id: str,
+        seq: int,
+        event_id: str,
+        fingerprint: str,
+    ) -> None:
+        self._validate_text(projection, "projection")
+        self._validate_text(stream_id, "stream_id")
+        self._validate_seq(seq)
+        self._validate_text(event_id, "event_id")
+        self._validate_text(fingerprint, "fingerprint")
+        with self.database.begin() as connection:
+            existing = connection.execute(
+                select(projection_event_receipts_table).where(
+                    projection_event_receipts_table.c.projection == projection,
+                    projection_event_receipts_table.c.stream_id == stream_id,
+                    projection_event_receipts_table.c.seq == seq,
+                )
+            ).mappings().first()
+            if existing is not None:
+                if (
+                    existing["event_id"] != event_id
+                    or existing["fingerprint"] != fingerprint
+                ):
+                    raise ValueError(
+                        "conflicting projection receipt for "
+                        f"projection={projection}, stream_id={stream_id}, seq={seq}"
+                    )
+                return
+            connection.execute(
+                insert(projection_event_receipts_table).values(
+                    projection=projection,
+                    stream_id=stream_id,
+                    seq=seq,
+                    event_id=event_id,
+                    fingerprint=fingerprint,
+                )
+            )
+
     @staticmethod
     def _validate_text(value: str, name: str) -> None:
         if not isinstance(value, str):
             raise TypeError(f"{name} must be a string")
         if not value.strip():
             raise ValueError(f"{name} must not be blank")
+
+    @staticmethod
+    def _validate_seq(seq: int) -> None:
+        if not isinstance(seq, int) or isinstance(seq, bool):
+            raise TypeError("seq must be an integer")
+        if seq < 0:
+            raise ValueError("seq must not be negative")
 
     def _save_max_once(self, projection: str, stream_id: str, seq: int) -> int:
         with self.database.begin() as connection:

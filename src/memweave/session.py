@@ -1,7 +1,6 @@
 """Synchronous session projection for current working memory."""
 
 import json
-import hashlib
 import logging
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -33,6 +32,7 @@ from .storage.schema import (
     session_event_receipts_table,
     session_states_table,
 )
+from .storage.event_receipts import event_fingerprint
 
 
 logger = logging.getLogger(__name__)
@@ -55,12 +55,6 @@ def _json_safe(value: Any) -> Any:
             default=_json_default,
         )
     )
-
-
-def _event_fingerprint(event: Event) -> str:
-    values = event.model_dump(mode="json", exclude={"ingested_at"})
-    encoded = json.dumps(values, sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
 @dataclass
@@ -394,7 +388,7 @@ class SessionStore:
                 )
             ).mappings().first()
             if receipt is not None:
-                fingerprint = _event_fingerprint(event)
+                fingerprint = event_fingerprint(event)
                 if receipt["fingerprint"] != fingerprint or receipt["event_id"] != str(event.event_id):
                     raise ProjectionConflictError(
                         "conflicting event for "
@@ -453,7 +447,7 @@ class SessionStore:
                     session_id=storage_session_id,
                     seq=event.seq,
                     event_id=str(event.event_id),
-                    fingerprint=_event_fingerprint(event),
+                    fingerprint=event_fingerprint(event),
                 )
             )
             return state

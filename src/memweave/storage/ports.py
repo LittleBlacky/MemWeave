@@ -52,6 +52,26 @@ class ProjectionCheckpointStore(Protocol):
 
 
 @runtime_checkable
+class ProjectionCheckpointReceiptStore(Protocol):
+    """Optional checkpoint capability for durable event identity checks."""
+
+    def get_receipt(
+        self, projection: str, stream_id: str, seq: int
+    ) -> tuple[str, str] | None:
+        ...
+
+    def save_receipt(
+        self,
+        projection: str,
+        stream_id: str,
+        seq: int,
+        event_id: str,
+        fingerprint: str,
+    ) -> None:
+        ...
+
+
+@runtime_checkable
 class ProjectionBackend(Protocol):
     name: str
 
