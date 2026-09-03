@@ -659,6 +659,16 @@ TDD 验证：Session 操作、协调器和读取屏障定向测试 `54 passed`�
   `lagging=True`、`degraded=True`，并返回明确的未追平错误。
 - 新增静默 catch-up 回归测试，确保不同 Runtime 实现不会绕过读取一致性契约。
 
+## 校验 Runtime 返回的目标水位
+
+日期：2026-09-04
+
+- 发现读取屏障此前直接信任 `ProjectionCatchup.target_seq()` 的返回值；非法负数、布尔值
+  或字符串会污染 `requested_seq`，且可能错误触发追平逻辑。
+- 屏障现在要求 Runtime 目标水位为非负整数；非法值按权威水位不可用处理，返回降级结果，
+  不调用 `catch_up()`。
+- 新增三种非法返回值的回归测试，保证 Adapter/Runtime 契约在读取边界闭合。
+
 ## 预检与幂等重试顺序
 
 日期：2026-09-04

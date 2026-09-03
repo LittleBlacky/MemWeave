@@ -176,6 +176,12 @@ class SessionReadBarrier:
         if target_seq is None:
             try:
                 requested_seq = self.runtime.target_seq(resolved_stream)
+                if not isinstance(requested_seq, int) or isinstance(
+                    requested_seq, bool
+                ):
+                    raise TypeError("runtime target_seq must be an integer")
+                if requested_seq < 0:
+                    raise ValueError("runtime target_seq must not be negative")
             except Exception as exc:
                 target_error = str(exc)
                 if integrity_error is not None:

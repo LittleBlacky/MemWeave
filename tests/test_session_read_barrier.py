@@ -1,5 +1,7 @@
 from uuid import uuid4
 
+import pytest
+
 from memweave.db import Database
 from memweave.events import EventStore
 from memweave.models import Event, EventType
@@ -220,6 +222,29 @@ def test_read_barrier_returns_local_state_when_target_watermark_is_unavailable(t
     assert result.lagging is False
     assert result.degraded is True
     assert result.error == "event authority unavailable"
+
+
+@pytest.mark.parametrize("invalid_target", [-1, True, "2"])
+def test_read_barrier_rejects_invalid_runtime_target_watermark(
+    tmp_path, invalid_target
+):
+    database = Database(str(tmp_path / "invalid-target.db"))
+    sessions = SessionStore(database)
+
+    class InvalidTarget:
+        def target_seq(self, stream_id):
+            return invalid_target
+
+        def catch_up(self, stream_id, target_seq):
+            raise AssertionError("catch_up must not run for an invalid target")
+
+    result = SessionReadBarrier(sessions, InvalidTarget()).read("s1")
+
+    assert result.requested_seq == 0
+    assert result.applied_seq == 0
+    assert result.lagging is False
+    assert result.degraded is True
+    assert "target_seq" in result.error
 
 
 def test_read_barrier_reports_equal_numeric_watermark_as_degraded_when_receipts_are_incomplete(
