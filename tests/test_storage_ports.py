@@ -574,6 +574,18 @@ def test_projection_dispatcher_rejects_invalid_backend_and_event_arguments():
         dispatcher.project(None)
 
 
+def test_projection_dispatcher_rejects_checkpoint_store_without_receipts():
+    class LegacyCheckpointStore:
+        def get(self, projection, stream_id):
+            return 0
+
+        def save_max(self, projection, stream_id, seq):
+            return seq
+
+    with pytest.raises(TypeError, match="ProjectionCheckpointReceiptStore"):
+        ProjectionDispatcher(checkpoint_store=LegacyCheckpointStore())
+
+
 def test_projection_dispatcher_distinguishes_invalid_stream_id_types(tmp_path):
     database = SQLiteDatabase(str(tmp_path / "dispatcher-invalid-stream.db"))
     checkpoint_store = RelationalProjectionCheckpointStore(database)
@@ -955,6 +967,7 @@ def test_projection_dispatcher_uses_backend_watermark_to_avoid_reapplying_after_
         def __init__(self):
             self.value = 0
             self.failed = False
+            self.receipts = {}
 
         def get(self, projection, stream_id):
             return self.value
@@ -965,6 +978,16 @@ def test_projection_dispatcher_uses_backend_watermark_to_avoid_reapplying_after_
                 raise RuntimeError("checkpoint unavailable")
             self.value = max(self.value, seq)
             return self.value
+
+        def get_receipt(self, projection, stream_id, seq):
+            return self.receipts.get((projection, stream_id, seq))
+
+        def save_receipt(self, projection, stream_id, seq, event_id, fingerprint):
+            key = (projection, stream_id, seq)
+            existing = self.receipts.get(key)
+            if existing is not None and existing != (event_id, fingerprint):
+                raise ValueError("conflicting projection receipt")
+            self.receipts[key] = (event_id, fingerprint)
 
     checkpoint_store = FailOnceCheckpointStore()
     dispatcher = ProjectionDispatcher(checkpoint_store=checkpoint_store)

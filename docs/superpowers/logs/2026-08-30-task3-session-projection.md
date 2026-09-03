@@ -459,3 +459,17 @@ TDD 验证：Task 3 会话、协调器、读取屏障和迁移定向测试 91 pa
 
 TDD 验证：Dispatcher、Recovery、Session Task 3 定向测试通过；`compileall` 与
 `git diff --check` 待本轮收尾验证。
+
+## 收敛 checkpoint 的严格 receipt 契约
+
+日期：2026-09-03
+
+- 修复第三方 checkpoint 实现缺少 receipt 能力时仍静默按序号跳过事件的问题。
+- `ProjectionDispatcher` 启用持久化 checkpoint 时，现在要求实现
+  `ProjectionCheckpointReceiptStore`；不完整实现会在初始化阶段明确拒绝。
+- 内置关系型 checkpoint store 在投影成功后写入 receipt，快速路径直接校验 receipt，
+  不再使用隐式弱一致性兼容分支。
+- 更新 fake checkpoint 测试和公共 storage 导出，明确第三方适配器必须同时实现
+  `get_receipt()` / `save_receipt()` 才能使用严格 Task 3 语义。
+
+TDD 验证：checkpoint、Dispatcher、Recovery 和 Session Task 3 回归测试通过。

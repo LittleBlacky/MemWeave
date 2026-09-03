@@ -53,7 +53,7 @@ class ProjectionCheckpointStore(Protocol):
 
 @runtime_checkable
 class ProjectionCheckpointReceiptStore(Protocol):
-    """Optional checkpoint capability for durable event identity checks."""
+    """Checkpoint capability required for strict event identity checks."""
 
     def get_receipt(
         self, projection: str, stream_id: str, seq: int
