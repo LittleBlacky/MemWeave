@@ -593,3 +593,16 @@ TDD 验证：新增 session receipt 缺口回归测试；Task 3 定向测试、�
 
 TDD 验证：Session 操作、协调器和读取屏障定向测试 `54 passed`；排除用户未跟踪旧测试后
 完整回归 `148 passed`，`compileall` 和 `git diff --check` 通过。
+
+## 拒绝显式空 stream_id 的默认回退
+
+日期：2026-09-04
+
+- 发现多个 Task 3 入口使用 `stream_id or canonical_stream`；调用方显式传入空字符串时，
+  会被静默当成未提供，从而可能把扩展 stream 的读写错误地指向 canonical session。
+- `SessionStore` 新增统一 `_resolve_stream_id()`：只有 `None` 才触发 canonical 默认值，空字符串、
+  错误类型或不匹配的 session 都在访问存储前拒绝；`SessionReadBarrier`、`get()`、
+  `_get_unverified()`、`upsert_active()` 和 `apply_operation()` 统一使用该入口。
+- `_read()` 和 `_write()` 同步保留显式 stream 值，不再用真假值判断，避免内部调用重新引入
+  静默回退。
+- 新增租户 session 回归测试，验证空 stream 不会产生 canonical session 的幽灵读取或写入。

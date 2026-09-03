@@ -100,6 +100,30 @@ def test_explicit_operations_update_session_memory_synchronously(tmp_path):
     assert forgotten.active_memories == []
 
 
+def test_explicit_empty_stream_id_is_rejected_instead_of_using_canonical(tmp_path):
+    store = SessionStore(Database(str(tmp_path / "empty-stream.db")), tenant_id="t1")
+    source_event_id = uuid4()
+
+    with pytest.raises(ValueError, match="stream_id"):
+        store.get("s1", stream_id="")
+    with pytest.raises(ValueError, match="stream_id"):
+        store.apply_operation(
+            operation(
+                OperationType.REMEMBER,
+                key="database.engine",
+                value="PostgreSQL",
+            ),
+            source_seq=1,
+            source_event_id=source_event_id,
+            stream_id="",
+        )
+    with pytest.raises(ValueError, match="stream_id"):
+        store.upsert_active(record(event_id=source_event_id), stream_id="")
+
+    assert store.get("s1").last_seq == 0
+    assert store.get("s1").active_memories == []
+
+
 def test_stale_explicit_update_does_not_overwrite_session_memory(tmp_path):
     store = SessionStore(Database(str(tmp_path / "memory.db")))
     first_event = project_event(store, 1)

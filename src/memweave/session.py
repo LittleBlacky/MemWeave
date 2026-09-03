@@ -154,9 +154,9 @@ class SessionReadBarrier:
         target_seq: int | None = None,
     ) -> SessionReadResult:
         self.session_store._validate_session_id(session_id)
-        resolved_stream = stream_id or self.session_store.stream_id_for_session(session_id)
-        if self.session_store._session_id_from_stream(resolved_stream) != session_id:
-            raise ValueError("stream_id does not match session_id")
+        resolved_stream = self.session_store._resolve_stream_id(
+            session_id, stream_id
+        )
         if target_seq is not None:
             if not isinstance(target_seq, int) or isinstance(target_seq, bool):
                 raise TypeError("target_seq must be an integer")
@@ -501,7 +501,7 @@ class SessionStore:
         must provide the full stream ID because a session ID alone is ambiguous.
         """
         self._validate_session_id(session_id)
-        resolved_stream = stream_id or self.stream_id_for_session(session_id)
+        resolved_stream = self._resolve_stream_id(session_id, stream_id)
         storage_session_id = self._storage_session_id(
             session_id, stream_id=resolved_stream
         )
@@ -516,7 +516,7 @@ class SessionStore:
         """Read a snapshot for degraded diagnostics without trusting its watermark."""
 
         self._validate_session_id(session_id)
-        resolved_stream = stream_id or self.stream_id_for_session(session_id)
+        resolved_stream = self._resolve_stream_id(session_id, stream_id)
         storage_session_id = self._storage_session_id(
             session_id, stream_id=resolved_stream
         )
@@ -539,7 +539,7 @@ class SessionStore:
         if memory.scope_id.strip() == "":
             raise ValueError("memory scope_id must not be blank")
         session_id = memory.scope_id
-        resolved_stream = stream_id or self.stream_id_for_session(session_id)
+        resolved_stream = self._resolve_stream_id(session_id, stream_id)
         storage_session_id = self._storage_session_id(
             session_id, stream_id=resolved_stream
         )
@@ -588,7 +588,7 @@ class SessionStore:
             raise ValueError("source_event_id must not be blank")
 
         session_id = operation.scope_id
-        resolved_stream = stream_id or self.stream_id_for_session(session_id)
+        resolved_stream = self._resolve_stream_id(session_id, stream_id)
         storage_session_id = self._storage_session_id(
             session_id, stream_id=resolved_stream
         )
@@ -856,7 +856,9 @@ class SessionStore:
         ).mappings().first()
         if row is None:
             return SessionState(session_id=logical_session_id)
-        expected_stream_id = stream_id or f"session:{logical_session_id}"
+        expected_stream_id = (
+            f"session:{logical_session_id}" if stream_id is None else stream_id
+        )
         persisted_stream_id = row.get("stream_id")
         if persisted_stream_id is None and storage_session_id.startswith("stream:"):
             if allow_legacy_replay:
@@ -924,7 +926,11 @@ class SessionStore:
         *,
         stream_id: str | None = None,
     ) -> None:
-        persisted_stream_id = stream_id or self.stream_id_for_session(state.session_id)
+        persisted_stream_id = (
+            self.stream_id_for_session(state.session_id)
+            if stream_id is None
+            else stream_id
+        )
         values = {
             "stream_id": persisted_stream_id,
             "last_seq": state.last_seq,
@@ -992,6 +998,17 @@ class SessionStore:
         if self.tenant_id is None:
             return f"session:{session_id}"
         return f"tenant:{self.tenant_id}/session:{session_id}"
+
+    def _resolve_stream_id(self, session_id: str, stream_id: str | None) -> str:
+        """Resolve an optional stream without treating explicit blanks as absent."""
+
+        self._validate_session_id(session_id)
+        resolved_stream = (
+            self.stream_id_for_session(session_id) if stream_id is None else stream_id
+        )
+        if self._session_id_from_stream(resolved_stream) != session_id:
+            raise ValueError("stream_id does not match session_id")
+        return resolved_stream
 
     def _storage_session_id(
         self, session_id: str, *, stream_id: str | None = None
