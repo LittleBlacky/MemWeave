@@ -830,17 +830,25 @@ class SessionStore:
     def _memory_index(
         state: SessionState, operation: MemoryOperation
     ) -> int | None:
+        key_index = None
         if operation.key is not None:
-            return next(
+            key_index = next(
                 (i for i, item in enumerate(state.active_memories) if item.key == operation.key),
                 None,
             )
+        memory_id_index = None
         if operation.memory_id is not None:
-            return next(
+            memory_id_index = next(
                 (i for i, item in enumerate(state.active_memories) if item.id == operation.memory_id),
                 None,
             )
-        return None
+        if (
+            operation.key is not None
+            and operation.memory_id is not None
+            and key_index != memory_id_index
+        ):
+            raise ValueError("memory key and memory_id identify different session memories")
+        return key_index if operation.key is not None else memory_id_index
 
     @staticmethod
     def _read(

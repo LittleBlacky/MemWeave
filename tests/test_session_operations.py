@@ -178,6 +178,35 @@ def test_update_without_kind_preserves_existing_memory_kind(tmp_path):
     assert updated.active_memories[0].kind is MemoryKind.FACT
 
 
+def test_forget_rejects_conflicting_key_and_memory_id(tmp_path):
+    store = SessionStore(Database(str(tmp_path / "memory-identity.db")))
+    first_event = project_event(store, 1)
+    first = record(event_id=first_event.event_id, key="first", value="one")
+    second = record(event_id=uuid4(), key="second", value="two")
+    store.upsert_active(first)
+    store.upsert_active(second)
+
+    second_event = project_event(store, 2)
+    conflicting = MemoryOperation(
+        operation=OperationType.FORGET,
+        scope=MemoryScope.SESSION,
+        scope_id="s1",
+        key="first",
+        memory_id=second.id,
+    )
+    with pytest.raises(ValueError, match="key and memory_id"):
+        store.apply_operation(
+            conflicting,
+            source_seq=2,
+            source_event_id=second_event.event_id,
+        )
+
+    assert {item.key for item in store.get("s1").active_memories} == {
+        "first",
+        "second",
+    }
+
+
 def test_stale_explicit_forget_does_not_delete_newer_session_memory(tmp_path):
     store = SessionStore(Database(str(tmp_path / "memory.db")))
     first_event = project_event(store, 1)
