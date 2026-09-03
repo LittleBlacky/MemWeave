@@ -854,8 +854,8 @@ class SessionStore:
             raise TypeError("session_id must be a string")
         if not session_id.strip():
             raise ValueError("session_id must not be blank")
-        if "/" in session_id:
-            raise ValueError("session_id must not contain '/'")
+        if "/" in session_id or ":" in session_id:
+            raise ValueError("session_id must not contain '/' or ':'")
 
     def _session_id_from_stream(self, stream_id: str) -> str:
         if not isinstance(stream_id, str):

@@ -431,6 +431,13 @@ def test_unscoped_session_store_rejects_tenant_streams(tmp_path):
     assert store.get("s1").last_seq == 0
 
 
+def test_session_id_rejects_reserved_namespace_delimiter(tmp_path):
+    store = SessionStore(Database(str(tmp_path / "memory.db")))
+
+    with pytest.raises(ValueError, match="must not contain.*:"):
+        store.get("tenant:session:s1")
+
+
 def test_tenant_session_store_accepts_extensible_scope_segments(tmp_path):
     store = SessionStore(
         Database(str(tmp_path / "memory.db")), tenant_id="tenant-a"

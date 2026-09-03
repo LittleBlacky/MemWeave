@@ -473,3 +473,16 @@ TDD 验证：Dispatcher、Recovery、Session Task 3 定向测试通过；`compil
   `get_receipt()` / `save_receipt()` 才能使用严格 Task 3 语义。
 
 TDD 验证：checkpoint、Dispatcher、Recovery 和 Session Task 3 回归测试通过。
+
+## 保留 session namespace 分隔符
+
+日期：2026-09-03
+
+- 发现无租户 session ID 若包含 `:`，可能与租户模式的内部键
+  `<tenant_id>:session:<session_id>` 发生碰撞。
+- 在会话 ID 输入边界拒绝 `/` 和 `:`；这两个字符分别保留给 stream scope 和存储命名空间，
+  避免不同租户/模式读取到同一份 session 状态。
+- 保留现有无租户兼容入口，但不再接受能够伪造租户内部键结构的 session ID；无需为未上线产品
+  引入历史键迁移。
+
+TDD 验证：新增保留分隔符回归测试，Task 3 定向测试通过。
