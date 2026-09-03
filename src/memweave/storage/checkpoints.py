@@ -2,7 +2,7 @@
 
 import time
 
-from sqlalchemy import insert, select, update
+from sqlalchemy import func, insert, select, update
 from sqlalchemy.exc import IntegrityError, OperationalError
 
 from .ports import ProjectionCheckpointStore
@@ -63,6 +63,33 @@ class RelationalProjectionCheckpointStore(ProjectionCheckpointStore):
                 )
             ).first()
         return None if row is None else (str(row[0]), str(row[1]))
+
+    def receipts_complete(
+        self, projection: str, stream_id: str, through_seq: int
+    ) -> bool:
+        self._validate_text(projection, "projection")
+        self._validate_text(stream_id, "stream_id")
+        self._validate_seq(through_seq)
+        if through_seq == 0:
+            return True
+        with self.database.read() as connection:
+            row = connection.execute(
+                select(
+                    func.count(projection_event_receipts_table.c.seq),
+                    func.min(projection_event_receipts_table.c.seq),
+                    func.max(projection_event_receipts_table.c.seq),
+                ).where(
+                    projection_event_receipts_table.c.projection == projection,
+                    projection_event_receipts_table.c.stream_id == stream_id,
+                    projection_event_receipts_table.c.seq <= through_seq,
+                )
+            ).one()
+        count, minimum, maximum = row
+        return (
+            int(count) == through_seq
+            and int(minimum or 0) == 1
+            and int(maximum or 0) == through_seq
+        )
 
     def save_receipt(
         self,

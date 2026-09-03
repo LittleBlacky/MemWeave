@@ -141,6 +141,11 @@ needs_confirmation
 
 事件投影的持久化 checkpoint 表示连续处理水位，而不是已见到的最大序号。启用 checkpoint 的 Dispatcher 遇到序号间隙时暂存事件，不推进水位；缺口补齐后按序投影并连续推进。未配置 checkpoint 的进程内 best-effort 分发不提供跨重启的乱序恢复保证。
 
+严格 checkpoint store 除了保存和读取单个事件 receipt，还必须能够判断 receipt 是否连续覆盖
+`1..N`。ProjectionRuntime 在恢复时先以 `min(checkpoint, backend watermark)` 作为有效水位执行
+该检查；receipt 缺失时保持 FAILED 并要求重放，即使事件流当前没有 `N+1` 的新事件也不能直接
+标记 READY。
+
 同一 `(projection, stream_id)` 的 checkpoint 更新必须单调且并发安全：使用数据库条件更新保证较小序号不能覆盖较大水位，首次插入冲突或暂时性锁错误仅做有限重试。
 
 进程内 `ProjectionDispatcher` 对每个 `(backend, stream_id)` 使用独立锁，串行化该 stream 的 pending 缓存、事件应用和 checkpoint 提交；不同后端或不同 stream 不共享此锁。后端注册应在开始投影前完成。

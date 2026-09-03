@@ -55,6 +55,12 @@ class ProjectionCheckpointStore(Protocol):
 class ProjectionCheckpointReceiptStore(Protocol):
     """Checkpoint capability required for strict event identity checks."""
 
+    def receipts_complete(
+        self, projection: str, stream_id: str, through_seq: int
+    ) -> bool:
+        """Return whether receipts cover every sequence from 1 through N."""
+        ...
+
     def get_receipt(
         self, projection: str, stream_id: str, seq: int
     ) -> tuple[str, str] | None:

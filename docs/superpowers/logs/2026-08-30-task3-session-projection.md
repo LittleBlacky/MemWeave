@@ -529,3 +529,18 @@ TDD 验证：新增保留分隔符回归测试，Task 3 定向测试通过。
 
 TDD 验证：迁移、存储端口和 Task 3 会话测试通过；完整测试、`compileall` 与
 `git diff --check` 已在本轮执行。
+
+## 恢复前审计 checkpoint receipt 连续性
+
+日期：2026-09-03
+
+- 发现 checkpoint 和后端水位都已到 `N`、但中间 receipt 丢失且没有 `N+1` 事件时，恢复流程
+  不会触发 Dispatcher 快速路径，可能错误标记为 READY。
+- 严格 checkpoint store 新增 `receipts_complete(projection, stream_id, through_seq)`，关系库
+  实现使用一次聚合查询验证 `1..N` 是否完整覆盖。
+- `ProjectionDispatcher.validate_checkpoint_receipts()` 在 Runtime 重放前按每个 projection 的
+  `min(checkpoint, backend watermark)` 执行审计；缺 receipt 或非法后端水位立即失败并保持 FAILED。
+- 更新恢复夹具，明确所有已完成水位必须有完整 receipt 链。
+
+TDD 验证：恢复、存储端口和 Session Task 3 定向测试 `82 passed`；完整回归另有用户未跟踪
+测试中的既有失败，未修改该文件。

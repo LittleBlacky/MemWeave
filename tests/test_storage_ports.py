@@ -1068,6 +1068,12 @@ def test_projection_dispatcher_uses_backend_watermark_to_avoid_reapplying_after_
             self.value = max(self.value, seq)
             return self.value
 
+        def receipts_complete(self, projection, stream_id, through_seq):
+            return all(
+                (projection, stream_id, seq) in self.receipts
+                for seq in range(1, through_seq + 1)
+            )
+
         def get_receipt(self, projection, stream_id, seq):
             return self.receipts.get((projection, stream_id, seq))
 

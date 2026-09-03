@@ -83,6 +83,7 @@ class ProjectionRuntime:
         try:
             target_seq = self.event_source.last_seq(stream_id)
             start_seq = self.dispatcher.replay_from(stream_id)
+            self.dispatcher.validate_checkpoint_receipts(stream_id)
             replay = self.event_source.list_after(stream_id, start_seq)
             replayed_events: Dict[int, Event] = {}
             ordered_replay = sorted(replay, key=lambda item: item.seq)

@@ -230,6 +230,28 @@ class ProjectionDispatcher:
         ]
         return min(checkpoints, default=0)
 
+    def validate_checkpoint_receipts(self, stream_id: str) -> None:
+        """Fail closed when a backend watermark lacks its durable receipts."""
+        self._validate_stream_id(stream_id)
+        if self._checkpoint_store is None:
+            return
+        for name, backend in self._backends.items():
+            checkpoint = self._checkpoint_store.get(name, stream_id)
+            backend_watermark = backend.watermark(stream_id)
+            if backend_watermark < 0:
+                raise RuntimeError(
+                    "projection backend returned a negative watermark"
+                )
+            through_seq = min(checkpoint, backend_watermark)
+            if not self._checkpoint_store.receipts_complete(
+                name, stream_id, through_seq
+            ):
+                raise RuntimeError(
+                    "projection checkpoint receipts are incomplete; replay required "
+                    f"for projection={name}, stream_id={stream_id}, "
+                    f"through_seq={through_seq}"
+                )
+
     def clear_pending(self, stream_id: str) -> int:
         """Drop buffered gap events after the caller has replayed the source log."""
         self._validate_stream_id(stream_id)
