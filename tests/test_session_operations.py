@@ -364,6 +364,7 @@ def test_receipts_are_backfilled_for_applied_events_on_migration_retry(tmp_path)
                     [
                         "0008_session_event_receipts",
                         "0009_projection_event_receipts",
+                        "0010_validate_projection_receipts",
                     ]
                 )
             )
@@ -372,6 +373,7 @@ def test_receipts_are_backfilled_for_applied_events_on_migration_retry(tmp_path)
     assert database.apply_migrations() == [
         "0008_session_event_receipts",
         "0009_projection_event_receipts",
+        "0010_validate_projection_receipts",
     ]
     conflict = event.model_copy(update={"actor": "user:b", "payload": {"text": "conflict"}})
     with pytest.raises(ValueError, match="conflicting event"):

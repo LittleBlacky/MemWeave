@@ -514,3 +514,18 @@ TDD 验证：Task 3 会话协调器及完整回归测试通过。
   引入历史键迁移。
 
 TDD 验证：新增保留分隔符回归测试，Task 3 定向测试通过。
+
+## 拒绝不完整的 projection receipt 回填
+
+日期：2026-09-03
+
+- 发现 `0009_projection_event_receipts` 只筛选 `seq <= checkpoint`，事件流缺少中间序号时
+  仍会为后续事件写入 receipt，导致 checkpoint 被错误解释为连续水位。
+- `0009` 现在要求回填事件严格覆盖 `1..checkpoint`；缺口、重复或异常序列直接抛错，迁移
+  事务整体回滚，不产生伪造 receipt。
+- 新增 `0010_validate_projection_receipts`，用于审计已执行旧版 `0009` 的数据库；连续流
+  可补齐缺失 receipt，发现缺口或事件身份冲突则 fail closed，等待人工修复或从权威事件流重放。
+- 新增缺口迁移回归测试，并保留旧事件表字段不完整时的兼容跳过行为。
+
+TDD 验证：迁移、存储端口和 Task 3 会话测试通过；完整测试、`compileall` 与
+`git diff --check` 已在本轮执行。

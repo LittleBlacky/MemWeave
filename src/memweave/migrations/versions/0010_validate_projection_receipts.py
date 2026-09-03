@@ -1,4 +1,4 @@
-"""Create receipts for events applied by generic projections."""
+"""Validate and complete projection receipt backfills from migration 0009."""
 
 import hashlib
 import json
@@ -26,7 +26,7 @@ def _fingerprint(row: dict) -> str:
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
-def _backfill(connection: Connection) -> None:
+def _validate_and_backfill(connection: Connection) -> None:
     required = {
         "event_id",
         "stream_id",
@@ -43,60 +43,63 @@ def _backfill(connection: Connection) -> None:
         "correlation_id",
     }
     columns = {item["name"] for item in inspect(connection).get_columns(events_table.name)}
+    # Legacy fixtures may have an events stub without immutable event fields.
+    # There is no safe receipt repair to perform for those databases.
     if not required.issubset(columns):
         return
 
-    watermarks = connection.execute(select(projection_watermarks_table)).mappings()
+    watermarks = connection.execute(select(projection_watermarks_table)).mappings().all()
     for watermark in watermarks:
-        events = connection.execute(
-            select(events_table).where(
-                events_table.c.stream_id == watermark["stream_id"],
-                events_table.c.seq <= int(watermark["last_seq"]),
-            ).order_by(events_table.c.seq)
-        ).mappings().all()
+        projection = str(watermark["projection"])
+        stream_id = str(watermark["stream_id"])
         checkpoint = int(watermark["last_seq"])
         if checkpoint < 0:
             raise ValueError(
-                "cannot backfill projection receipts for a negative checkpoint: "
-                f"projection={watermark['projection']}, "
-                f"stream_id={watermark['stream_id']}, checkpoint={checkpoint}"
+                "cannot validate projection receipts for a negative checkpoint: "
+                f"projection={projection}, stream_id={stream_id}, checkpoint={checkpoint}"
             )
+        events = connection.execute(
+            select(events_table)
+            .where(
+                events_table.c.stream_id == stream_id,
+                events_table.c.seq <= checkpoint,
+            )
+            .order_by(events_table.c.seq)
+        ).mappings().all()
         sequences = [int(event["seq"]) for event in events]
         expected = list(range(1, checkpoint + 1))
         if sequences != expected:
             raise ValueError(
-                "cannot backfill projection receipts across an incomplete event stream: "
-                f"projection={watermark['projection']}, "
-                f"stream_id={watermark['stream_id']}, checkpoint={checkpoint}, "
-                f"observed_sequences={sequences}"
+                "cannot validate projection receipts across an incomplete event stream: "
+                f"projection={projection}, stream_id={stream_id}, "
+                f"checkpoint={checkpoint}, observed_sequences={sequences}"
             )
+
         for event in events:
+            seq = int(event["seq"])
+            fingerprint = _fingerprint(dict(event))
             existing = connection.execute(
                 select(projection_event_receipts_table).where(
-                    projection_event_receipts_table.c.projection
-                    == watermark["projection"],
-                    projection_event_receipts_table.c.stream_id
-                    == watermark["stream_id"],
-                    projection_event_receipts_table.c.seq == int(event["seq"]),
+                    projection_event_receipts_table.c.projection == projection,
+                    projection_event_receipts_table.c.stream_id == stream_id,
+                    projection_event_receipts_table.c.seq == seq,
                 )
             ).mappings().first()
-            fingerprint = _fingerprint(dict(event))
             if existing is not None:
                 if (
                     existing["event_id"] != str(event["event_id"])
                     or existing["fingerprint"] != fingerprint
                 ):
                     raise ValueError(
-                        "conflicting projection receipt during migration for "
-                        f"projection={watermark['projection']}, "
-                        f"stream_id={watermark['stream_id']}, seq={event['seq']}"
+                        "conflicting projection receipt during validation for "
+                        f"projection={projection}, stream_id={stream_id}, seq={seq}"
                     )
                 continue
             connection.execute(
                 insert(projection_event_receipts_table).values(
-                    projection=watermark["projection"],
-                    stream_id=watermark["stream_id"],
-                    seq=int(event["seq"]),
+                    projection=projection,
+                    stream_id=stream_id,
+                    seq=seq,
                     event_id=str(event["event_id"]),
                     fingerprint=fingerprint,
                 )
@@ -105,4 +108,4 @@ def _backfill(connection: Connection) -> None:
 
 def upgrade(connection: Connection) -> None:
     projection_event_receipts_table.create(connection, checkfirst=True)
-    _backfill(connection)
+    _validate_and_backfill(connection)

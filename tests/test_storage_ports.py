@@ -4,7 +4,7 @@ from threading import Barrier, Event as ThreadEvent, Lock
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import inspect, text
+from sqlalchemy import delete, inspect, select, text
 from sqlalchemy.exc import ProgrammingError
 
 from memweave.events import EventStore
@@ -16,6 +16,12 @@ from memweave.storage.event_receipts import event_fingerprint
 from memweave.storage.migrations import MigrationRunner
 from memweave.storage.ports import EventProjector, EventRepository, ProjectionBackend, VectorIndex
 from memweave.storage.sqlalchemy import SQLAlchemyDatabase
+from memweave.storage.schema import (
+    events_table,
+    projection_event_receipts_table,
+    projection_watermarks_table,
+    schema_migrations_table,
+)
 from memweave.storage.sqlite import SQLiteDatabase
 
 
@@ -49,6 +55,7 @@ def test_sqlite_database_migrations_are_versioned_and_idempotent(tmp_path):
         "0007_session_stream_recovery",
         "0008_session_event_receipts",
         "0009_projection_event_receipts",
+        "0010_validate_projection_receipts",
     ]
 
 
@@ -65,6 +72,7 @@ def test_default_migration_runner_discovers_packaged_migrations():
         "0007_session_stream_recovery",
         "0008_session_event_receipts",
         "0009_projection_event_receipts",
+        "0010_validate_projection_receipts",
     ]
 
 
@@ -109,6 +117,7 @@ def test_generic_sqlalchemy_database_can_apply_core_migration(tmp_path):
         "0007_session_stream_recovery",
         "0008_session_event_receipts",
         "0009_projection_event_receipts",
+        "0010_validate_projection_receipts",
     ]
     assert database.applied_migrations() == [
         "0001_core",
@@ -120,6 +129,7 @@ def test_generic_sqlalchemy_database_can_apply_core_migration(tmp_path):
         "0007_session_stream_recovery",
         "0008_session_event_receipts",
         "0009_projection_event_receipts",
+        "0010_validate_projection_receipts",
     ]
 
 
@@ -159,6 +169,7 @@ def test_stream_identity_migration_upgrades_legacy_session_tables(tmp_path):
         "0007_session_stream_recovery",
         "0008_session_event_receipts",
         "0009_projection_event_receipts",
+        "0010_validate_projection_receipts",
     ]
     with database.read() as connection:
         assert "stream_id" in {
@@ -169,6 +180,75 @@ def test_stream_identity_migration_upgrades_legacy_session_tables(tmp_path):
             column["name"]
             for column in inspect(connection).get_columns("session_command_leases")
         }
+
+
+def test_projection_receipt_backfill_rejects_incomplete_event_stream(tmp_path):
+    database = SQLiteDatabase(str(tmp_path / "projection-receipt-gap.db"))
+    events = EventStore(database)
+    events.append(
+        "session:gap-migration",
+        EventType.USER_MESSAGE,
+        {"text": "one"},
+        "user:test",
+        request_id=uuid4(),
+    )
+    events.append(
+        "session:gap-migration",
+        EventType.USER_MESSAGE,
+        {"text": "two"},
+        "user:test",
+        request_id=uuid4(),
+    )
+    third = events.append(
+        "session:gap-migration",
+        EventType.USER_MESSAGE,
+        {"text": "three"},
+        "user:test",
+        request_id=uuid4(),
+    )
+    with database.begin() as connection:
+        connection.execute(
+            delete(events_table).where(
+                events_table.c.stream_id == "session:gap-migration",
+                events_table.c.seq == 2,
+            )
+        )
+        connection.execute(
+            projection_watermarks_table.insert().values(
+                projection="recording",
+                stream_id="session:gap-migration",
+                last_seq=third.seq,
+            )
+        )
+        connection.execute(
+            delete(projection_event_receipts_table).where(
+                projection_event_receipts_table.c.stream_id == "session:gap-migration"
+            )
+        )
+        connection.execute(
+            delete(schema_migrations_table).where(
+                schema_migrations_table.c.version.in_([
+                    "0009_projection_event_receipts",
+                    "0010_validate_projection_receipts",
+                ])
+            )
+        )
+
+    with pytest.raises(ValueError, match="incomplete event stream"):
+        database.apply_migrations()
+
+    with database.read() as connection:
+        assert connection.execute(
+            text(
+                "SELECT COUNT(*) FROM projection_event_receipts "
+                "WHERE stream_id = 'session:gap-migration'"
+            )
+        ).scalar_one() == 0
+        assert connection.execute(
+            select(schema_migrations_table.c.version).where(
+                schema_migrations_table.c.version == "0009_projection_event_receipts"
+            )
+        ).scalar_one_or_none() is None
 
 
 def test_stream_recovery_migration_resets_only_ambiguous_sessions(tmp_path):
@@ -228,7 +308,7 @@ def test_stream_recovery_migration_resets_only_ambiguous_sessions(tmp_path):
             "('tenant:t/session:plain')"
         )
 
-    assert database.apply_migrations() == ["0007_session_stream_recovery", "0008_session_event_receipts", "0009_projection_event_receipts"]
+    assert database.apply_migrations() == ["0007_session_stream_recovery", "0008_session_event_receipts", "0009_projection_event_receipts", "0010_validate_projection_receipts"]
     with database.read() as connection:
         assert connection.execute(
             text("SELECT COUNT(*) FROM session_states WHERE session_id = 'stream:legacy'")
@@ -267,7 +347,7 @@ def test_generic_sqlalchemy_database_migrations_are_safe_under_concurrent_startu
     with ThreadPoolExecutor(max_workers=8) as executor:
         results = list(executor.map(apply_migrations, range(8)))
 
-    assert sum(result == ["0001_core", "0002_outbox", "0003_outbox_consumer_receipts", "0004_session_states", "0005_session_command_leases", "0006_session_stream_identity", "0007_session_stream_recovery", "0008_session_event_receipts", "0009_projection_event_receipts"] for result in results) == 1
+    assert sum(result == ["0001_core", "0002_outbox", "0003_outbox_consumer_receipts", "0004_session_states", "0005_session_command_leases", "0006_session_stream_identity", "0007_session_stream_recovery", "0008_session_event_receipts", "0009_projection_event_receipts", "0010_validate_projection_receipts"] for result in results) == 1
     assert sum(result == [] for result in results) == 7
     assert database.apply_migrations() == []
     assert database.applied_migrations() == [
@@ -280,6 +360,7 @@ def test_generic_sqlalchemy_database_migrations_are_safe_under_concurrent_startu
         "0007_session_stream_recovery",
         "0008_session_event_receipts",
         "0009_projection_event_receipts",
+        "0010_validate_projection_receipts",
     ]
 
 
