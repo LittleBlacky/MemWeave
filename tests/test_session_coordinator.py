@@ -471,6 +471,21 @@ def test_database_lease_serializes_separate_session_store_instances(tmp_path):
         assert lease.fencing_token == 2
 
 
+def test_command_lease_rejects_non_finite_timing_values(tmp_path):
+    store = SessionStore(Database(str(tmp_path / "lease-timing.db")))
+
+    with pytest.raises(ValueError, match="lease_seconds must be finite"):
+        with store.command_lease(
+            "session:s1", owner_id="process-a", lease_seconds=float("inf")
+        ):
+            raise AssertionError("lease must not be acquired")
+    with pytest.raises(ValueError, match="lease_seconds must be finite"):
+        with store.command_lease(
+            "session:s1", owner_id="process-a", lease_seconds=float("nan")
+        ):
+            raise AssertionError("lease must not be acquired")
+
+
 def test_fencing_token_rejects_projection_from_expired_owner(tmp_path):
     database = Database(str(tmp_path / "memory.db"))
     first = SessionStore(database)

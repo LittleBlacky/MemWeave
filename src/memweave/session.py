@@ -2,6 +2,7 @@
 
 import json
 import logging
+import math
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -244,6 +245,15 @@ class SessionStore:
         storage_session_id = self._storage_session_id(session_id, stream_id=stream_id)
         if not isinstance(owner_id, str) or not owner_id.strip():
             raise ValueError("owner_id must be a non-empty string")
+        for value, name in (
+            (lease_seconds, "lease_seconds"),
+            (wait_timeout, "wait_timeout"),
+            (poll_interval, "poll_interval"),
+        ):
+            if not isinstance(value, (int, float)) or isinstance(value, bool):
+                raise TypeError(f"{name} must be a number")
+            if not math.isfinite(value):
+                raise ValueError(f"{name} must be finite")
         if lease_seconds <= 0 or wait_timeout < 0 or poll_interval <= 0:
             raise ValueError("lease timing values are invalid")
         deadline = time.monotonic() + wait_timeout

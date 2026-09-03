@@ -490,6 +490,18 @@ TDD 验证：checkpoint、Dispatcher、Recovery 和 Session Task 3 回归测试�
 
 TDD 验证：Task 3 会话、Dispatcher、Recovery、读取屏障和存储测试通过。
 
+## 拒绝非有限租约参数
+
+日期：2026-09-03
+
+- 发现 `lease_seconds=inf` 会创建永不过期的数据库租约，进程崩溃后可能永久阻塞同一
+  session；`NaN` 也会进入错误的重试路径。
+- `command_lease()` 现在要求 `lease_seconds`、`wait_timeout` 和 `poll_interval` 都是
+  有限数字，并保留原有正数/非负约束。
+- 新增正无穷和 NaN 参数回归测试，防止租约因异常浮点值失去可恢复性。
+
+TDD 验证：Task 3 会话协调器及完整回归测试通过。
+
 ## 保留 session namespace 分隔符
 
 日期：2026-09-03
