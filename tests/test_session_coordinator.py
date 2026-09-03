@@ -9,6 +9,7 @@ from sqlalchemy.exc import OperationalError
 
 from memweave.db import Database
 from memweave.events import EventStore
+from memweave.errors import StaleWriteError
 from memweave.models import Event, EventType, MemoryOperation, MemoryScope, OperationType
 from memweave.policy import ExplicitOperationParser, ParseContext
 from memweave.session import SessionCommandCoordinator, SessionStore
@@ -134,6 +135,39 @@ def test_projection_failure_leaves_event_for_replay(tmp_path):
     recovered = original_apply_event(stored_events[0])
     assert recovered.last_seq == 1
     assert recovered.active_memories[0].value == "PostgreSQL"
+
+
+def test_deterministically_invalid_command_is_rejected_before_append(tmp_path):
+    database = Database(str(tmp_path / "preflight.db"))
+    events = EventStore(database)
+    sessions = SessionStore(database)
+    coordinator = SessionCommandCoordinator(events, sessions)
+
+    invalid_update = MemoryOperation(
+        operation=OperationType.UPDATE,
+        scope=MemoryScope.SESSION,
+        scope_id="s1",
+        key="missing",
+        value="value",
+    )
+    with pytest.raises(StaleWriteError):
+        coordinator.append_explicit(
+            invalid_update,
+            stream_id="session:s1",
+            actor="user:u1",
+            request_id=uuid4(),
+        )
+
+    assert events.last_seq("session:s1") == 0
+    assert sessions.get("s1").last_seq == 0
+
+    result = coordinator.append_explicit(
+        remember(key="available", value="value"),
+        stream_id="session:s1",
+        actor="user:u1",
+        request_id=uuid4(),
+    )
+    assert result.event.seq == 1
 
 
 def test_replaying_same_memory_command_event_is_idempotent(tmp_path):

@@ -3,6 +3,7 @@
 import json
 import logging
 import math
+from copy import deepcopy
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -619,6 +620,31 @@ class SessionStore:
                 )
             return state
 
+    def validate_operation(
+        self, operation: MemoryOperation, *, stream_id: str | None = None
+    ) -> None:
+        """Validate a deterministic session operation without changing state.
+
+        Coordinators use this preflight before appending a command event so a
+        permanently invalid command cannot become a sequence gap that blocks
+        all later events. Runtime projection failures remain recoverable after
+        the event has been appended.
+        """
+
+        if not isinstance(operation, MemoryOperation):
+            raise TypeError("operation must be a MemoryOperation")
+        if operation.scope is not MemoryScope.SESSION:
+            raise ValueError("session projection requires session-scoped operation")
+        session_id = operation.scope_id
+        resolved_stream = self._resolve_stream_id(session_id, stream_id)
+        state = deepcopy(self.get(session_id, stream_id=resolved_stream))
+        self._apply_operation_to_state(
+            state,
+            operation,
+            source_seq=state.last_seq + 1,
+            source_event_id=UUID(int=0),
+        )
+
     @staticmethod
     def _is_recent_event(event: Event) -> bool:
         return event.event_type in {
@@ -1126,6 +1152,9 @@ class SessionCommandCoordinator:
             with self.session_store.command_lease(
                 stream_id, owner_id=self.owner_id
             ) as lease:
+                self.session_store.validate_operation(
+                    operation, stream_id=stream_id
+                )
                 event = self.event_store.append(
                     stream_id=stream_id,
                     event_type=EventType.MEMORY_COMMAND,
