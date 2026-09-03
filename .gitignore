@@ -25,6 +25,7 @@ data/
 tmp/
 /logs/
 work/
+*.code-workspace
 
 # IDE and OS
 .idea/
