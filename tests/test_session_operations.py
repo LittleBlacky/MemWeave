@@ -552,6 +552,13 @@ def test_tenant_session_store_rejects_foreign_stream_id(tmp_path):
         store.apply_event(event)
 
 
+def test_tenant_id_rejects_stream_namespace_delimiter(tmp_path):
+    with pytest.raises(ValueError, match="must not contain.*[/]"):
+        SessionStore(
+            Database(str(tmp_path / "invalid-tenant.db")), tenant_id="tenant/a"
+        )
+
+
 def test_unscoped_session_store_rejects_tenant_streams(tmp_path):
     store = SessionStore(Database(str(tmp_path / "memory.db")))
     event = Event(

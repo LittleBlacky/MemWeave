@@ -1031,8 +1031,10 @@ class SessionStore:
     def _validate_namespace(value: str, name: str) -> None:
         if not isinstance(value, str):
             raise TypeError(f"{name} must be a string")
-        if not value.strip() or ":" in value:
-            raise ValueError(f"{name} must be non-empty and must not contain ':'")
+        if not value.strip() or ":" in value or "/" in value:
+            raise ValueError(
+                f"{name} must be non-empty and must not contain ':' or '/'"
+            )
 
     @staticmethod
     def _assert_lease(connection, storage_session_id: str, lease: SessionLease) -> None:
