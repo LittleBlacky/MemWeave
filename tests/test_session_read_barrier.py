@@ -147,6 +147,29 @@ def test_read_barrier_reports_lag_when_recovery_cannot_cover_target(tmp_path):
     assert result.error
 
 
+def test_read_barrier_degrades_when_catchup_returns_without_reaching_target(tmp_path):
+    database = Database(str(tmp_path / "silent-catchup.db"))
+    event_store = EventStore(database)
+    append_messages(event_store, 2)
+    sessions = SessionStore(database)
+    runtime = make_runtime(database, sessions, event_store)
+
+    class SilentCatchup:
+        def target_seq(self, stream_id):
+            return 2
+
+        def catch_up(self, stream_id, target_seq):
+            return 0
+
+    result = SessionReadBarrier(sessions, SilentCatchup()).read("s1")
+
+    assert result.applied_seq == 0
+    assert result.requested_seq == 2
+    assert result.lagging is True
+    assert result.degraded is True
+    assert "remains behind" in result.error
+
+
 def test_read_barrier_depends_on_catchup_contract_not_runtime_internals(tmp_path):
     database = Database(str(tmp_path / "memory.db"))
     event_store = EventStore(database)

@@ -213,11 +213,19 @@ class SessionReadBarrier:
                 degraded = True
                 error = str(exc)
                 integrity_error = exc
+        lagging = integrity_error is not None or state.last_seq < requested_seq
+        if lagging and not degraded:
+            degraded = True
+            if error is None:
+                error = (
+                    "session projection remains behind requested sequence: "
+                    f"requested={requested_seq}, applied={state.last_seq}"
+                )
         return SessionReadResult(
             state=state,
             requested_seq=requested_seq,
             applied_seq=state.last_seq,
-            lagging=integrity_error is not None or state.last_seq < requested_seq,
+            lagging=lagging,
             degraded=degraded,
             error=error,
         )
