@@ -23,3 +23,7 @@ class ProjectionConflictError(MemWeaveError, ValueError):
 
 class SessionProjectionIntegrityError(MemWeaveError, RuntimeError):
     """Raised when a session snapshot is not backed by a complete receipt chain."""
+
+
+class SessionSequenceGapError(MemWeaveError, ValueError):
+    """Raised when a session event is not the next contiguous sequence."""

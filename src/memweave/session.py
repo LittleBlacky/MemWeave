@@ -20,6 +20,7 @@ from sqlalchemy.exc import IntegrityError, OperationalError
 from .errors import (
     ProjectionConflictError,
     SessionProjectionIntegrityError,
+    SessionSequenceGapError,
     StaleWriteError,
 )
 from .models import (
@@ -474,7 +475,7 @@ class SessionStore:
                     f"replay required for stream_id={event.stream_id}, seq={event.seq}"
                 )
             if event.seq != state.last_seq + 1:
-                raise ValueError(
+                raise SessionSequenceGapError(
                     "session event sequence gap: "
                     f"expected {state.last_seq + 1}, got {event.seq}"
                 )
@@ -1170,9 +1171,7 @@ class SessionCommandCoordinator:
 
         try:
             return self.session_store.apply_event(event, lease=lease)
-        except ValueError as exc:
-            if not str(exc).startswith("session event sequence gap:"):
-                raise
+        except SessionSequenceGapError:
             self._catch_up_existing_events(event.stream_id, lease)
             return self.session_store.apply_event(event, lease=lease)
 

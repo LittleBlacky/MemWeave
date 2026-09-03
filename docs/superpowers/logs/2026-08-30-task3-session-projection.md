@@ -711,3 +711,5 @@ TDD 验证：Session 操作、协调器和读取屏障定向测试 `54 passed`�
 - 命令事件遇到明确的 sequence gap 时，现在在同一 lease 内从 EventStore 追平已提交前缀，
   再重试该命令；非 gap 的业务错误不会被吞掉或重试。
 - 新增竞态回归测试，模拟普通事件在命令 append 内提交，验证命令最终 seq=2 且会话水位连续。
+- sequence gap 现在使用明确的 `SessionSequenceGapError` 类型，Coordinator 只重试该类型，
+  不再依赖错误文本匹配。
