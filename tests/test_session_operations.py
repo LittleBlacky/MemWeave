@@ -160,6 +160,24 @@ def test_stale_explicit_update_does_not_overwrite_session_memory(tmp_path):
     assert store.get("s1").active_memories[0].value == "PyCharm"
 
 
+def test_update_without_kind_preserves_existing_memory_kind(tmp_path):
+    store = SessionStore(Database(str(tmp_path / "memory-kind.db")))
+    first_event = project_event(store, 1)
+    fact = record(event_id=first_event.event_id, key="timezone", value="UTC")
+    fact = fact.model_copy(update={"kind": MemoryKind.FACT})
+    store.upsert_active(fact)
+
+    second_event = project_event(store, 2)
+    updated = store.apply_operation(
+        operation(OperationType.UPDATE, key="timezone", value="Asia/Shanghai"),
+        source_seq=2,
+        source_event_id=second_event.event_id,
+    )
+
+    assert updated.active_memories[0].value == "Asia/Shanghai"
+    assert updated.active_memories[0].kind is MemoryKind.FACT
+
+
 def test_stale_explicit_forget_does_not_delete_newer_session_memory(tmp_path):
     store = SessionStore(Database(str(tmp_path / "memory.db")))
     first_event = project_event(store, 1)

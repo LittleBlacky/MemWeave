@@ -809,7 +809,10 @@ class SessionStore:
             record_times["updated_at"] = source_occurred_at
         record = MemoryRecord(
             id=record_id,
-            kind=operation.kind or MemoryKind.WORKING,
+            kind=(
+                operation.kind
+                or (existing.kind if existing is not None else MemoryKind.WORKING)
+            ),
             scope=MemoryScope.SESSION,
             scope_id=operation.scope_id,
             key=operation.key,

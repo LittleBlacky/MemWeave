@@ -616,3 +616,13 @@ TDD 验证：Session 操作、协调器和读取屏障定向测试 `54 passed`�
 - 租户命名空间现在同时拒绝 `:` 和 `/`，确保生成的 `tenant:<id>/.../session:<id>`
   结构不会被租户值自身破坏。
 - 新增构造期回归测试；已有合法租户和扩展 project stream 行为保持不变。
+
+## UPDATE 缺省 kind 保持原有分类
+
+日期：2026-09-04
+
+- 发现 `MemoryOperation.kind` 可选，但更新已有 `FACT` 或 `DECISION` 记忆时，缺省值会
+  被 `or MemoryKind.WORKING` 覆盖，导致仅修改 value 就改变记忆分类。
+- 投影现在仅在没有既有记录时将缺省 kind 设为 `WORKING`；更新已有记录且未指定 kind
+  时沿用当前分类，显式 kind 仍可按命令要求变更。
+- 新增回归测试覆盖已有 FACT 的无 kind 更新，确保实时投影和重放得到相同分类。
