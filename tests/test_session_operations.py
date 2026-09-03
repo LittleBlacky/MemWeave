@@ -378,7 +378,7 @@ def test_receipts_are_backfilled_for_applied_events_on_migration_retry(tmp_path)
         SessionStore(database).apply_event(conflict)
 
 
-def test_missing_receipt_for_applied_sequence_fails_closed(tmp_path):
+def test_snapshot_behind_existing_receipt_can_be_rebuilt(tmp_path):
     path = str(tmp_path / "memory.db")
     database = Database(path)
     event = Event(
@@ -392,13 +392,14 @@ def test_missing_receipt_for_applied_sequence_fails_closed(tmp_path):
     store.apply_event(event)
     with database.begin() as connection:
         connection.execute(
-            delete(session_event_receipts_table).where(
-                session_event_receipts_table.c.session_id == "s1"
+            delete(session_states_table).where(
+                session_states_table.c.session_id == "s1"
             )
         )
 
-    with pytest.raises(RuntimeError, match="receipt is missing.*replay required"):
-        store.apply_event(event)
+    rebuilt = store.apply_event(event)
+    assert rebuilt.last_seq == 1
+    assert rebuilt.recent_messages[0]["payload"] == {"text": "original"}
 
 
 def test_tenant_session_store_rejects_foreign_stream_id(tmp_path):

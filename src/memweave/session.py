@@ -400,12 +400,11 @@ class SessionStore:
                     session_id,
                     stream_id=event.stream_id,
                 )
-                if state.last_seq < event.seq:
-                    raise RuntimeError(
-                        "session event receipt exists but snapshot is behind; "
-                        f"replay required for stream_id={event.stream_id}, seq={event.seq}"
-                    )
-                return state
+                if state.last_seq >= event.seq:
+                    return state
+                # The snapshot may have been restored from an older backup
+                # while receipts survived. Re-apply the authoritative event
+                # during replay; the receipt is reused below.
             state = self._read(
                 connection,
                 storage_session_id,
@@ -442,14 +441,15 @@ class SessionStore:
             self._write(
                 connection, state, storage_session_id, stream_id=event.stream_id
             )
-            connection.execute(
-                session_event_receipts_table.insert().values(
-                    session_id=storage_session_id,
-                    seq=event.seq,
-                    event_id=str(event.event_id),
-                    fingerprint=event_fingerprint(event),
+            if receipt is None:
+                connection.execute(
+                    session_event_receipts_table.insert().values(
+                        session_id=storage_session_id,
+                        seq=event.seq,
+                        event_id=str(event.event_id),
+                        fingerprint=event_fingerprint(event),
+                    )
                 )
-            )
             return state
 
     def get(self, session_id: str, *, stream_id: str | None = None) -> SessionState:

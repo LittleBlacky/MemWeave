@@ -80,17 +80,12 @@ class ProjectionDispatcher:
                 try:
                     if self._checkpoint_store is not None:
                         checkpoint = self._checkpoint_store.get(name, event.stream_id)
+                        backend_watermark = backend.watermark(event.stream_id)
                         if event.seq <= checkpoint:
                             receipt = self._checkpoint_store.get_receipt(
                                 name, event.stream_id, event.seq
                             )
-                            if receipt is None:
-                                raise RuntimeError(
-                                    "projection checkpoint receipt is missing; "
-                                    f"replay required for projection={name}, "
-                                    f"stream_id={event.stream_id}, seq={event.seq}"
-                                )
-                            if receipt != (
+                            if receipt is not None and receipt != (
                                 str(event.event_id),
                                 event_fingerprint(event),
                             ):
@@ -99,20 +94,35 @@ class ProjectionDispatcher:
                                     f"projection={name}, stream_id={event.stream_id}, "
                                     f"seq={event.seq}"
                                 )
-                            pending = self._pending.get((name, event.stream_id))
-                            if pending:
-                                obsolete = [
-                                    seq for seq in pending if seq <= checkpoint
-                                ]
-                                with self._pending_count_lock:
-                                    for seq in obsolete:
-                                        pending.pop(seq, None)
-                                    self._pending_count -= len(obsolete)
-                            if not pending:
-                                self._pending.pop((name, event.stream_id), None)
-                            watermarks[name] = checkpoint
-                            self._clear_error(event.stream_id, name)
-                            continue
+                            if backend_watermark >= event.seq:
+                                if receipt is None:
+                                    raise RuntimeError(
+                                        "projection checkpoint receipt is missing; "
+                                        f"replay required for projection={name}, "
+                                        f"stream_id={event.stream_id}, seq={event.seq}"
+                                    )
+                                pending = self._pending.get((name, event.stream_id))
+                                if pending:
+                                    obsolete = [
+                                        seq for seq in pending if seq <= checkpoint
+                                    ]
+                                    with self._pending_count_lock:
+                                        for seq in obsolete:
+                                            pending.pop(seq, None)
+                                        self._pending_count -= len(obsolete)
+                                if not pending:
+                                    self._pending.pop((name, event.stream_id), None)
+                                watermarks[name] = checkpoint
+                                self._clear_error(event.stream_id, name)
+                                continue
+                            # The persisted checkpoint is ahead of the actual
+                            # backend state. Rebuild from the backend watermark;
+                            # never let a stale checkpoint hide a lost snapshot.
+                            checkpoint = backend_watermark
+                        if checkpoint < 0:
+                            raise RuntimeError(
+                                "projection backend returned a negative watermark"
+                            )
                         pending = self._pending.setdefault((name, event.stream_id), {})
                         existing = pending.get(event.seq)
                         if existing is not None:
@@ -150,8 +160,9 @@ class ProjectionDispatcher:
                             # checkpoint write failed after apply(), a retry
                             # must advance the checkpoint without applying the
                             # same event a second time.
-                            if backend.watermark(event.stream_id) < candidate.seq:
+                            if backend_watermark < candidate.seq:
                                 backend.apply(candidate)
+                                backend_watermark = candidate.seq
                             self._checkpoint_store.save_receipt(
                                 name,
                                 event.stream_id,
@@ -211,8 +222,11 @@ class ProjectionDispatcher:
         if self._checkpoint_store is None or not self._backends:
             return 0
         checkpoints = [
-            self._checkpoint_store.get(name, stream_id)
-            for name in self._backends
+            min(
+                self._checkpoint_store.get(name, stream_id),
+                backend.watermark(stream_id),
+            )
+            for name, backend in self._backends.items()
         ]
         return min(checkpoints, default=0)
 

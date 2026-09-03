@@ -64,7 +64,11 @@ def test_projection_runtime_replays_events_after_dispatcher_restart(tmp_path):
     runtime = ProjectionRuntime(restarted, event_store)
 
     assert runtime.recover("session:recovery") == 3
-    assert restarted_backend.events == [events[1].event_id, events[2].event_id]
+    assert restarted_backend.events == [
+        events[0].event_id,
+        events[1].event_id,
+        events[2].event_id,
+    ]
     assert checkpoint_store.get("recording", "session:recovery") == 3
 
 
@@ -118,8 +122,12 @@ def test_projection_runtime_starts_replay_after_slowest_projection_checkpoint(tm
             self.name = name
 
     dispatcher = ProjectionDispatcher(checkpoint_store=checkpoint_store)
-    dispatcher.register_backend(NamedBackend("fast"))
-    dispatcher.register_backend(NamedBackend("slow"))
+    fast = NamedBackend("fast")
+    slow = NamedBackend("slow")
+    fast._watermarks["session:start"] = 5
+    slow._watermarks["session:start"] = 3
+    dispatcher.register_backend(fast)
+    dispatcher.register_backend(slow)
     from memweave.storage.recovery import ProjectionRuntime
 
     assert ProjectionRuntime(dispatcher, source).recover("session:start") == 5

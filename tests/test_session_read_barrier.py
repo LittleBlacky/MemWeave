@@ -11,7 +11,9 @@ from memweave.session import (
 from memweave.storage.checkpoints import RelationalProjectionCheckpointStore
 from memweave.storage.coordinator import ProjectionDispatcher
 from memweave.storage.recovery import ProjectionRuntime
+from memweave.storage.schema import session_states_table
 from memweave.storage.sqlalchemy import SQLAlchemyDatabase
+from sqlalchemy import delete
 
 
 def append_messages(event_store, count):
@@ -64,6 +66,28 @@ def test_runtime_buffers_gap_and_applies_session_events_in_order(tmp_path):
     state = sessions.get("s1")
     assert state.last_seq == 4
     assert [item["seq"] for item in state.recent_messages] == [1, 2, 3, 4]
+
+
+def test_runtime_rebuilds_session_snapshot_when_checkpoint_is_ahead(tmp_path):
+    database = Database(str(tmp_path / "snapshot-rebuild.db"))
+    event_store = EventStore(database)
+    events = append_messages(event_store, 1)
+    sessions = SessionStore(database)
+    runtime = make_runtime(database, sessions, event_store)
+    runtime.recover("session:s1")
+
+    with database.begin() as connection:
+        connection.execute(
+            delete(session_states_table).where(
+                session_states_table.c.session_id == "s1"
+            )
+        )
+
+    assert sessions.get("s1").last_seq == 0
+    assert runtime.recover("session:s1") == 1
+    rebuilt = sessions.get("s1")
+    assert rebuilt.last_seq == 1
+    assert rebuilt.recent_messages[0]["payload"]["text"] == "message-1"
 
 
 def test_read_barrier_recovers_lagging_session_before_returning(tmp_path):

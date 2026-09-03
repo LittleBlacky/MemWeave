@@ -474,6 +474,22 @@ TDD 验证：Dispatcher、Recovery、Session Task 3 定向测试通过；`compil
 
 TDD 验证：checkpoint、Dispatcher、Recovery 和 Session Task 3 回归测试通过。
 
+## 防止 checkpoint 超前掩盖快照丢失
+
+日期：2026-09-03
+
+- 发现 checkpoint/receipt 仍在、但 SessionStore 快照回滚或丢失时，Dispatcher 会按 receipt
+  直接跳过事件，ProjectionRuntime 误标记 READY，实际会话状态仍停留在旧水位。
+- 快速路径现在同时检查后端实际 `watermark(stream_id)`；后端水位落后于持久化 checkpoint
+  时，以实际水位作为恢复起点，重新接收权威事件流。
+- `replay_from()` 使用每个 projection 的 `min(checkpoint, backend watermark)`，避免任何
+  一个投影的持久化 checkpoint 超前于真实后端状态。
+- SessionStore 在 receipt 保留但快照落后时允许重新应用相同权威事件，并复用已有 receipt，
+  从而支持快照重建且不重复插入收据。
+- 新增快照删除后的完整恢复回归测试，并更新重启投影测试以区分 checkpoint 与后端实际水位。
+
+TDD 验证：Task 3 会话、Dispatcher、Recovery、读取屏障和存储测试通过。
+
 ## 保留 session namespace 分隔符
 
 日期：2026-09-03

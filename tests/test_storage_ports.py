@@ -739,6 +739,7 @@ def test_projection_checkpoint_survives_dispatcher_recreation(tmp_path):
     assert recreated.get("recording", "session:checkpoint") == 7
 
     second_backend = RecordingBackend()
+    second_backend.last_seq[event.stream_id] = 7
     restarted = ProjectionDispatcher(checkpoint_store=recreated)
     restarted.register_backend(second_backend)
 
@@ -883,6 +884,8 @@ def test_projection_dispatcher_fails_closed_when_checkpoint_receipt_is_missing(t
     )
 
     checkpoint_store.save_max("recording", event.stream_id, 1)
+    backend = dispatcher._backends["recording"]
+    backend.last_seq[event.stream_id] = 1
     assert dispatcher.project(event) == {}
     assert "checkpoint receipt is missing" in dispatcher.errors()[
         event.stream_id
@@ -918,6 +921,7 @@ def test_projection_dispatcher_clears_pending_events_covered_by_external_checkpo
         event_fingerprint(third),
     )
     checkpoint_store.save_max("recording", "session:cleanup", 3)
+    backend.last_seq["session:cleanup"] = 3
 
     assert dispatcher.project(third) == {"recording": 3}
     assert dispatcher._pending == {}
@@ -947,8 +951,12 @@ def test_projection_dispatcher_replay_from_uses_slowest_registered_checkpoint(tm
     checkpoint_store.save_max("fast", "session:replay", 5)
     checkpoint_store.save_max("slow", "session:replay", 3)
     dispatcher = ProjectionDispatcher(checkpoint_store=checkpoint_store)
-    dispatcher.register_backend(RecordingBackend("fast"))
-    dispatcher.register_backend(RecordingBackend("slow"))
+    fast = RecordingBackend("fast")
+    slow = RecordingBackend("slow")
+    fast.last_seq["session:replay"] = 5
+    slow.last_seq["session:replay"] = 3
+    dispatcher.register_backend(fast)
+    dispatcher.register_backend(slow)
 
     assert dispatcher.replay_from("session:replay") == 3
 
