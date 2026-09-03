@@ -52,7 +52,7 @@ class ProjectionCheckpointStore(Protocol):
 
 
 @runtime_checkable
-class ProjectionCheckpointReceiptStore(Protocol):
+class ProjectionCheckpointReceiptStore(ProjectionCheckpointStore, Protocol):
     """Checkpoint capability required for strict event identity checks."""
 
     def receipts_complete(

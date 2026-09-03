@@ -3,7 +3,7 @@ from threading import Event as ThreadEvent
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import delete
+from sqlalchemy import delete, update
 
 from memweave.events import EventStore
 from memweave.models import Event
@@ -110,6 +110,51 @@ def test_projection_runtime_rejects_missing_receipt_before_empty_recovery(tmp_pa
     assert backend.events == []
 
 
+@pytest.mark.parametrize(
+    "field, value",
+    [("event_id", str(uuid4())), ("fingerprint", "wrong")],
+)
+def test_projection_runtime_rejects_receipt_identity_conflict_before_empty_recovery(
+    tmp_path, field, value
+):
+    database = SQLiteDatabase(str(tmp_path / f"recovery-conflicting-{field}.db"))
+    event_store = EventStore(database)
+    events = _append_events(event_store, "session:conflicting-receipt", 2)
+    checkpoint_store = RelationalProjectionCheckpointStore(database)
+    for event in events:
+        checkpoint_store.save_receipt(
+            "recording",
+            event.stream_id,
+            event.seq,
+            str(event.event_id),
+            event_fingerprint(event),
+        )
+    checkpoint_store.save_max("recording", events[-1].stream_id, events[-1].seq)
+    with database.begin() as connection:
+        connection.execute(
+            update(projection_event_receipts_table)
+            .where(
+                projection_event_receipts_table.c.projection == "recording",
+                projection_event_receipts_table.c.stream_id == events[-1].stream_id,
+                projection_event_receipts_table.c.seq == 1,
+            )
+            .values(**{field: value})
+        )
+
+    backend = RecordingBackend()
+    backend._watermarks[events[-1].stream_id] = events[-1].seq
+    dispatcher = ProjectionDispatcher(checkpoint_store=checkpoint_store)
+    dispatcher.register_backend(backend)
+    from memweave.storage.recovery import ProjectionRuntime, ProjectionRuntimeState
+
+    runtime = ProjectionRuntime(dispatcher, event_store)
+    with pytest.raises(ValueError, match="conflicting projection receipt"):
+        runtime.recover(events[-1].stream_id)
+
+    assert runtime.state(events[-1].stream_id) is ProjectionRuntimeState.FAILED
+    assert backend.events == []
+
+
 def test_projection_runtime_starts_replay_after_slowest_projection_checkpoint(tmp_path):
     database = SQLiteDatabase(str(tmp_path / "recovery-start.db"))
     checkpoint_store = RelationalProjectionCheckpointStore(database)
@@ -119,6 +164,17 @@ def test_projection_runtime_starts_replay_after_slowest_projection_checkpoint(tm
     class RecordingSource:
         def __init__(self):
             self.start_seq = None
+            self.prefix_events = [
+                Event(
+                    event_id=uuid4(),
+                    event_type="code.test_passed",
+                    stream_id="session:start",
+                    seq=seq,
+                    actor="agent:codex",
+                    payload={"seq": seq},
+                )
+                for seq in (1, 2, 3)
+            ]
             self.events = [
                 Event(
                     event_id=uuid4(),
@@ -136,18 +192,13 @@ def test_projection_runtime_starts_replay_after_slowest_projection_checkpoint(tm
 
         def list_after(self, stream_id, seq):
             self.start_seq = seq
+            if seq == 0:
+                return [*self.prefix_events, *self.events]
             return self.events
 
     source = RecordingSource()
-    for seq in (1, 2, 3):
-        prefix_event = Event(
-            event_id=uuid4(),
-            event_type="code.test_passed",
-            stream_id="session:start",
-            seq=seq,
-            actor="agent:codex",
-            payload={"seq": seq},
-        )
+    for prefix_event in source.prefix_events:
+        seq = prefix_event.seq
         for projection in ("fast", "slow"):
             checkpoint_store.save_receipt(
                 projection,

@@ -83,21 +83,22 @@ class ProjectionRuntime:
         try:
             target_seq = self.event_source.last_seq(stream_id)
             start_seq = self.dispatcher.replay_from(stream_id)
-            self.dispatcher.validate_checkpoint_receipts(stream_id)
-            replay = self.event_source.list_after(stream_id, start_seq)
-            replayed_events: Dict[int, Event] = {}
-            ordered_replay = sorted(replay, key=lambda item: item.seq)
-            for event in ordered_replay:
-                self._validate_event_stream(event, stream_id)
-                existing = replayed_events.get(event.seq)
-                if existing is not None:
-                    if existing != event:
-                        raise ValueError(
-                            "conflicting events for "
-                            f"stream_id={stream_id}, seq={event.seq}"
-                        )
-                    continue
-                replayed_events[event.seq] = event
+            if start_seq == 0:
+                replay = self.event_source.list_after(stream_id, 0)
+                replayed_events = self._normalize_events(replay, stream_id)
+                self.dispatcher.validate_checkpoint_receipts(
+                    stream_id, replayed_events.values()
+                )
+            else:
+                # Strict receipt identity requires the authoritative prefix;
+                # keep this audit separate from the actual replay boundary.
+                audit = self.event_source.list_after(stream_id, 0)
+                audited_events = self._normalize_events(audit, stream_id)
+                self.dispatcher.validate_checkpoint_receipts(
+                    stream_id, audited_events.values()
+                )
+                replay = self.event_source.list_after(stream_id, start_seq)
+                replayed_events = self._normalize_events(replay, stream_id)
             for event in sorted(replayed_events.values(), key=lambda item: item.seq):
                 self.dispatcher.project(event)
                 self._raise_on_dispatch_error(stream_id)
@@ -201,10 +202,30 @@ class ProjectionRuntime:
 
     @staticmethod
     def _validate_event_stream(event: Event, stream_id: str) -> None:
+        if not isinstance(event, Event):
+            raise TypeError("replay source must return Event objects")
         if event.stream_id != stream_id:
             raise ValueError(
                 "replay event stream_id does not match requested stream_id"
             )
+
+    @classmethod
+    def _normalize_events(cls, events, stream_id: str) -> Dict[int, Event]:
+        normalized: Dict[int, Event] = {}
+        materialized = list(events)
+        for event in materialized:
+            cls._validate_event_stream(event, stream_id)
+        for event in sorted(materialized, key=lambda item: item.seq):
+            existing = normalized.get(event.seq)
+            if existing is not None:
+                if existing != event:
+                    raise ValueError(
+                        "conflicting events for "
+                        f"stream_id={stream_id}, seq={event.seq}"
+                    )
+                continue
+            normalized[event.seq] = event
+        return normalized
 
     @staticmethod
     def _covers_target_sequence(

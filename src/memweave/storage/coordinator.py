@@ -6,7 +6,7 @@ this module still only performs best-effort in-process fan-out.
 """
 
 from threading import Lock, RLock
-from typing import Dict, Tuple
+from typing import Dict, Iterable, Tuple
 from weakref import WeakValueDictionary
 
 from ..models import Event
@@ -230,11 +230,28 @@ class ProjectionDispatcher:
         ]
         return min(checkpoints, default=0)
 
-    def validate_checkpoint_receipts(self, stream_id: str) -> None:
-        """Fail closed when a backend watermark lacks its durable receipts."""
+    def validate_checkpoint_receipts(
+        self, stream_id: str, authoritative_events: Iterable[Event]
+    ) -> None:
+        """Fail closed when receipts are missing or disagree with the event log."""
         self._validate_stream_id(stream_id)
         if self._checkpoint_store is None:
             return
+        events_by_seq: Dict[int, Event] = {}
+        for event in authoritative_events:
+            if not isinstance(event, Event):
+                raise TypeError("authoritative_events must contain Event objects")
+            if event.stream_id != stream_id:
+                raise ValueError(
+                    "authoritative event stream_id does not match requested stream_id"
+                )
+            existing = events_by_seq.get(event.seq)
+            if existing is not None and existing != event:
+                raise ProjectionConflictError(
+                    "conflicting authoritative events for "
+                    f"stream_id={stream_id}, seq={event.seq}"
+                )
+            events_by_seq[event.seq] = event
         for name, backend in self._backends.items():
             checkpoint = self._checkpoint_store.get(name, stream_id)
             backend_watermark = backend.watermark(stream_id)
@@ -251,6 +268,25 @@ class ProjectionDispatcher:
                     f"for projection={name}, stream_id={stream_id}, "
                     f"through_seq={through_seq}"
                 )
+            for seq in range(1, through_seq + 1):
+                event = events_by_seq.get(seq)
+                if event is None:
+                    raise RuntimeError(
+                        "authoritative event is missing; replay required "
+                        f"for projection={name}, stream_id={stream_id}, seq={seq}"
+                    )
+                receipt = self._checkpoint_store.get_receipt(name, stream_id, seq)
+                expected = (str(event.event_id), event_fingerprint(event))
+                if receipt != expected:
+                    if receipt is None:
+                        raise RuntimeError(
+                            "projection checkpoint receipt is missing; replay required "
+                            f"for projection={name}, stream_id={stream_id}, seq={seq}"
+                        )
+                    raise ProjectionConflictError(
+                        "conflicting projection receipt for "
+                        f"projection={name}, stream_id={stream_id}, seq={seq}"
+                    )
 
     def clear_pending(self, stream_id: str) -> int:
         """Drop buffered gap events after the caller has replayed the source log."""

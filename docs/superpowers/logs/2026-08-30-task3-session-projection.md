@@ -544,3 +544,19 @@ TDD 验证：迁移、存储端口和 Task 3 会话测试通过；完整测试�
 
 TDD 验证：恢复、存储端口和 Session Task 3 定向测试 `82 passed`；完整回归另有用户未跟踪
 测试中的既有失败，未修改该文件。
+
+## 恢复前校验 receipt 事件身份
+
+日期：2026-09-03
+
+- 发现仅检查 receipt 的 `1..N` 序号覆盖仍不够：receipt 的 `event_id` 或 fingerprint 被篡改时，
+  没有 `N+1` 事件的恢复仍可能错误标记 READY。
+- Runtime 现在读取权威事件流前缀，Dispatcher 逐条比对 `event_id + fingerprint`；权威事件缺失、
+  receipt 缺失或身份冲突都会 fail closed，投影后端不会被误判为已恢复。
+- `ProjectionCheckpointReceiptStore` 继承基础 `ProjectionCheckpointStore`，receipt-only 的不完整
+  适配器在 Dispatcher 初始化阶段即被拒绝。
+- 保留正常重放从最慢有效水位开始的语义；前缀读取只用于恢复前审计，不改变投影执行顺序。
+- 当前实现会在恢复时物化该 stream 的历史前缀，换取严格身份核对；后续可为超长 stream
+  增加 `list_until` 或流式 receipt 审计接口，降低一次性内存和延迟成本。
+
+TDD 验证：恢复与存储端口测试 `64 passed`；`compileall` 和 `git diff --check` 通过。

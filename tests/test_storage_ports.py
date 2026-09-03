@@ -667,6 +667,21 @@ def test_projection_dispatcher_rejects_checkpoint_store_without_receipts():
         ProjectionDispatcher(checkpoint_store=LegacyCheckpointStore())
 
 
+def test_projection_dispatcher_rejects_receipt_only_checkpoint_store():
+    class ReceiptOnlyCheckpointStore:
+        def receipts_complete(self, projection, stream_id, through_seq):
+            return True
+
+        def get_receipt(self, projection, stream_id, seq):
+            return None
+
+        def save_receipt(self, projection, stream_id, seq, event_id, fingerprint):
+            return None
+
+    with pytest.raises(TypeError, match="ProjectionCheckpointReceiptStore"):
+        ProjectionDispatcher(checkpoint_store=ReceiptOnlyCheckpointStore())
+
+
 def test_projection_dispatcher_distinguishes_invalid_stream_id_types(tmp_path):
     database = SQLiteDatabase(str(tmp_path / "dispatcher-invalid-stream.db"))
     checkpoint_store = RelationalProjectionCheckpointStore(database)
