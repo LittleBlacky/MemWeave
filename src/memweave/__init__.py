@@ -14,6 +14,7 @@ from .models import (
     OperationType,
 )
 from .protocol import ProtocolVersion
+from .durable import DurableMemoryStore
 
 __all__ = [
     "AuthContext",
@@ -28,4 +29,5 @@ __all__ = [
     "MemoryStatus",
     "OperationType",
     "ProtocolVersion",
+    "DurableMemoryStore",
 ]

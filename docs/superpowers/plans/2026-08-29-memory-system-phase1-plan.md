@@ -166,11 +166,11 @@ docs/superpowers/logs/
 **Interfaces:**
 - `DurableMemoryStore.create(record)`, `update(operation)`, `forget(operation)`, `get_active(scope, scope_id, key)`, `list_versions(scope, scope_id, key)`.
 
-- [ ] **Step 1: Write failing tests** for compare-and-swap versions, monotonic `source_seq`, same-value deduplication, idempotent forget, and tombstone masking.
-- [ ] **Step 2: Run `python -m pytest tests/test_durable_versions.py -q`** and verify failure.
-- [ ] **Step 3: Implement authoritative memories and tombstones**; preserve superseded versions and source evidence, expose only active non-retracted records, and reject stale writes.
-- [ ] **Step 4: Run durable tests** including database reopen and out-of-order async updates.
-- [ ] **Step 5: Commit** with `feat: add versioned durable memory authority`.
+- [x] **Step 1: Write failing tests** for compare-and-swap versions, monotonic `source_seq`, same-value deduplication, idempotent forget, and tombstone masking.
+- [x] **Step 2: Run `python -m pytest tests/test_durable_versions.py -q`** and verify failure.
+- [x] **Step 3: Implement authoritative memories and tombstones**; preserve superseded versions and source evidence, expose only active non-retracted records, and reject stale writes.
+- [x] **Step 4: Run durable tests** including database reopen and out-of-order async updates.
+- [x] **Step 5: Commit** with `feat: add versioned durable memory authority`.
 
 ## Task 5: Outbox and Retryable Worker
 

@@ -92,6 +92,31 @@ session_command_leases_table = Table(
     Column("fencing_token", Integer, nullable=False),
 )
 
+durable_memories_table = Table(
+    "durable_memories",
+    metadata,
+    Column("memory_id", String(36), nullable=False),
+    Column("scope", String(32), nullable=False),
+    Column("scope_id", String(255), nullable=False),
+    Column("key", String(512), nullable=False),
+    Column("version", Integer, nullable=False),
+    Column("kind", String(64), nullable=False),
+    Column("value_json", Text, nullable=False),
+    Column("status", String(32), nullable=False),
+    Column("confidence", Float, nullable=False),
+    Column("source_json", Text, nullable=False),
+    Column("source_seq", Integer, nullable=False),
+    Column("created_at", String(64), nullable=False),
+    Column("updated_at", String(64), nullable=False),
+    UniqueConstraint(
+        "scope",
+        "scope_id",
+        "key",
+        "version",
+        name="uq_durable_memory_scope_key_version",
+    ),
+)
+
 schema_migrations_table = Table(
     "schema_migrations",
     metadata,
