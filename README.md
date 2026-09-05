@@ -4,6 +4,10 @@ An event-sourced, evolvable memory fabric for agents.
 
 MemWeave 是面向 Agent 的可扩展记忆基础设施。它将原始对话、工具调用、外部业务事件和用户操作记录为不可变事件，再投影为会话工作记忆、长期事实、历史经验和可检索索引。
 
+## License
+
+MemWeave is licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) for the full text.
+
 ## 项目目标
 
 - 在当前会话内提供稳定的读后写一致性。
