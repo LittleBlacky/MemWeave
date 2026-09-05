@@ -378,6 +378,31 @@ class DurableMemoryStore:
             return None
         return latest
 
+    def list_active(self, scope: MemoryScope, scope_id: str) -> list[MemoryRecord]:
+        """Return the current active version for every key in one scope.
+
+        Tombstones and superseded versions are evaluated from the complete
+        version chain, so a stale index cannot make retracted content visible.
+        """
+        self._validate_scope_args(scope, scope_id, None)
+        with self.database.read() as connection:
+            rows = connection.execute(
+                select(durable_memories_table)
+                .where(
+                    durable_memories_table.c.scope == scope.value,
+                    durable_memories_table.c.scope_id == scope_id,
+                )
+                .order_by(
+                    durable_memories_table.c.key,
+                    durable_memories_table.c.version.desc(),
+                )
+            ).mappings().all()
+        latest: dict[str, MemoryRecord] = {}
+        for row in rows:
+            if row["key"] not in latest:
+                latest[row["key"]] = self._row_to_record(row)
+        return [record for record in latest.values() if record.status is MemoryStatus.ACTIVE]
+
     def list_versions(
         self, scope: MemoryScope, scope_id: str, key: str
     ) -> list[MemoryRecord]:

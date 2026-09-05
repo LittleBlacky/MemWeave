@@ -15,6 +15,7 @@ from .models import (
 )
 from .protocol import ProtocolVersion
 from .durable import DurableMemoryStore
+from .recall import RecallProvider, RecallService
 
 __all__ = [
     "AuthContext",
@@ -30,4 +31,6 @@ __all__ = [
     "OperationType",
     "ProtocolVersion",
     "DurableMemoryStore",
+    "RecallProvider",
+    "RecallService",
 ]

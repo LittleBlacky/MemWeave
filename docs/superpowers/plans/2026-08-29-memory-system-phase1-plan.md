@@ -23,7 +23,8 @@
 - Memory data cannot override system instructions, tool permissions, or adapter capabilities.
 - Phase 1 implements text and structured values, deterministic recall, L1 and L3. Task 7 also defines the
   pluggable natural-language extraction and policy gate needed by L1; concrete hosted LLM providers,
-  vector/graph indexes, L2 proxy and automatic policy evolution remain later work.
+  vector/graph indexes, L2 proxy, Episode/Experience/Skill/Workflow/Prediction runtime and automatic
+  policy evolution remain later work. `MemoryRecord` is not a catch-all model for those later objects.
 - Phase 1 implements a SQLite relational adapter and defines ports for simultaneous vector, graph, keyword, KV, and blob backends; concrete external index adapters remain later work.
 
 ---
@@ -200,11 +201,11 @@ docs/superpowers/logs/
 - `RecallRequest(query, session_id, visible_scopes, kinds, top_k, max_tokens, consistency)`.
 - `RecallService.recall(request) -> RecallResult` and replaceable `RecallProvider.search(request)`.
 
-- [ ] **Step 1: Write failing tests** for session-over-durable precedence, scope isolation, tombstone filtering, stale-version exclusion, token budget, and durable-unavailable fallback.
-- [ ] **Step 2: Run the recall tests** and verify failure.
-- [ ] **Step 3: Implement deterministic exact/keyword recall** with session-first merge, source-sequence ordering, permission filtering, deduplication, top-k and token limits; mark injected values as memory data.
-- [ ] **Step 4: Run focused recall tests** and verify all constraints.
-- [ ] **Step 5: Commit** with `feat: add bounded session-first recall`.
+- [x] **Step 1: Write failing tests** for session-over-durable precedence, scope isolation, tombstone filtering, stale-version exclusion, token budget, and durable-unavailable fallback.
+- [x] **Step 2: Run the recall tests** and verify failure.
+- [x] **Step 3: Implement deterministic exact/keyword recall** with session-first merge, source-sequence ordering, permission filtering, deduplication, top-k and token limits; mark injected values as memory data.
+- [x] **Step 4: Run focused recall tests** and verify all constraints.
+- [x] **Step 5: Commit** with `feat: add bounded session-first recall`.
 
 ## Task 7: MemoryKernel and Middleware Adapter
 
@@ -226,9 +227,9 @@ docs/superpowers/logs/
 - `AgentAdapter.capabilities() -> CapabilitySet`.
 - `L1Middleware.start_turn(TurnInput) -> TurnHandle`; `provide_context(handle) -> ContextEnvelope`; `record_event(handle, ProtocolEvent)`; `finish_turn(handle, TurnOutcome)`.
 
-- [ ] **Step 1: Write failing tests** proving middleware before-turn recall is automatic, explicit remember/update/forget is synchronous, after-turn emits events and enqueues extraction, and adapter reports `session_consistent` plus degradation flags. Add natural-language cases such as “项目后续都得用 Python 来写”, ambiguous text returning no candidate, normalized project/user scope, and policy rejection of low-confidence or sensitive candidates.
+- [ ] **Step 1: Write failing tests** proving middleware before-turn recall is automatic, explicit remember/update/forget is synchronous, after-turn emits events and enqueues the phase-one extraction hook, and adapter reports `session_consistent` plus degradation flags. Add natural-language cases such as “项目后续都得用 Python 来写”, ambiguous text returning no candidate, normalized project/user scope, and policy rejection of low-confidence or sensitive candidates.
 - [ ] **Step 2: Run `python -m pytest tests/test_middleware_adapter.py -q`** and verify failure.
-- [ ] **Step 3: Implement extraction and policy ports first**; keep explicit `CommandSpec/ParserRule` parsing deterministic, normalize natural-language candidates behind a replaceable extractor, and require the policy gate to approve every implicit write.
+- [ ] **Step 3: Implement extraction and policy ports first**; keep explicit `CommandSpec/ParserRule` parsing deterministic, provide only a rules-based candidate baseline, normalize natural-language candidates behind a replaceable extractor, and require the policy gate to approve every implicit write. Hosted LLM extraction and candidate persistence belong to Phase 2.
 - [ ] **Step 4: Implement Kernel orchestration and L1 hooks**; short-circuit explicit commands before model execution, inject bounded context envelopes, propagate request/idempotency metadata, enqueue ordinary extraction after the turn without blocking the next turn, and never let memory text become instructions.
 - [ ] **Step 5: Run middleware and extraction tests** with a fake host Agent and verify the N-turn race scenario returns the latest session projection even when extraction is delayed or retried.
 - [ ] **Step 6: Commit** with `feat: add l1 middleware and pluggable memory extraction`.
@@ -268,7 +269,7 @@ docs/superpowers/logs/
 
 ## Plan Self-Review
 
-Spec coverage: Tasks 1–2 cover protocol metadata and event sourcing; Tasks 3–6 cover session, durable state, lifecycle, outbox, recall, scope, and budgets; Task 7 covers the required L1 adapter contract plus replaceable natural-language extraction and policy gates; Task 8 covers L3 adapter contracts and HTTP/tool governance; Task 9 covers phase-one acceptance and documentation. Hosted LLM providers, vector/graph indexes, L2 proxy, experience synthesis, and automatic policy evolution remain deferred.
+Spec coverage: Tasks 1–2 cover protocol metadata and event sourcing; Tasks 3–6 cover session, durable state, lifecycle, outbox, recall, scope, and budgets; Task 7 covers the required L1 adapter contract plus a replaceable extraction/policy boundary and rules baseline; Task 8 covers L3 adapter contracts and HTTP/tool governance; Task 9 covers phase-one acceptance and documentation. Hosted LLM providers, candidate persistence, relation/experience/skill synthesis, vector/graph indexes, L2 proxy, prediction, and automatic policy evolution remain deferred to later phases.
 
 Placeholder scan: No TODO/TBD or unspecified test steps are used. Every public type and method referenced by a later task is defined in an earlier task.
 
@@ -283,3 +284,14 @@ Placeholder scan: No TODO/TBD or unspecified test steps are used. Every public t
   厂商 SDK 作为可选依赖，不进入 `memweave-core` 核心包。
 
 Type consistency: Adapters depend only on `AgentAdapter`, `MemoryKernel`, and protocol models; HTTP and tools never access SQLite tables directly. Identity is always supplied by `AuthContext` from the service boundary.
+
+## Phase Boundary
+
+Phase 1 establishes the reliable memory substrate only. Its public `MemoryRecord` model may represent
+facts, preferences, constraints, decisions, and session state, but it must not be used as an implicit
+container for future `Episode`, `Experience`, `Skill`, `Workflow`, `Relation`, or `Prediction` objects.
+
+Phase 1 exposes replaceable extraction and policy interfaces so an adapter can collect candidates, but
+does not provide hosted LLM extraction, candidate lifecycle storage, experience synthesis, skill execution,
+or predictive behavior. Those capabilities require the Phase 2+ plans and their own evidence, version,
+permission, and rollback semantics.
