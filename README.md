@@ -2,7 +2,7 @@
 
 An event-sourced, evolvable memory fabric for agents.
 
-MemWeave 是面向 Agent 的可扩展记忆基础设施。它将原始对话、工具调用、外部业务事件和用户操作记录为不可变事件，再投影为会话工作记忆、长期事实、历史经验和可检索索引。
+MemWeave 是面向 Agent 的可扩展记忆、经验和技能基础设施。它将原始对话、工具调用、外部业务事件和用户操作记录为不可变事件，再投影为会话工作记忆、长期事实、任务经验和可检索关系；技能由 MemWeave 保存和治理，由 Agent Runtime 执行。
 
 ## License
 
@@ -21,6 +21,7 @@ MemWeave is licensed under the Apache License, Version 2.0. See [LICENSE](LICENS
 ## 非目标
 
 - 第一阶段不实现自动修改生产代码或模型的能力。
+- 第一阶段不实现 Episode、Experience、Skill、Workflow 或 Prediction 的完整运行时能力。
 - 第一阶段不要求绑定某一种向量数据库、图数据库或消息队列。
 - 第一阶段不把搜索索引作为记忆真相；权威状态必须可独立读取和重建索引。
 - 第一阶段不追求一次性覆盖所有外部数据源和多模态解析器。
@@ -61,9 +62,9 @@ uv run pytest tests/test_events.py tests/test_storage_ports.py -q
 
 ## 计划路线
 
-1. 最小可靠闭环：事件日志、会话投影、显式记忆 CRUD、长期权威表、Outbox 和基础召回。
-2. 自动化提取与检索增强：事实/偏好提取、向量索引、受控工具和治理策略。
-3. 经验与多租户能力：Episode 经验、图索引、外部来源和积压运维。
-4. 受控自进化：反馈评估、策略灰度和能力优化流水线。
+1. 可靠记忆底座：事件日志、会话投影、显式记忆 CRUD、长期权威表、Outbox 和基础召回。
+2. 自动化记忆与语义召回：事实/偏好候选提取、关系建立、向量索引、混合检索和治理策略。
+3. 记忆关联、经验和 Skill：Episode、经验归纳、失败模式、Skill/Workflow 注册和复用。
+4. 预测与受控进化：反馈评估、用户意图预测、召回/提取/工具策略灰度和能力优化流水线。
 
 当前首个 commit 只建立项目目标和开发约束，不包含运行时代码。
