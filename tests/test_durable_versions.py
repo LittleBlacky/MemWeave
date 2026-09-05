@@ -154,6 +154,69 @@ def test_create_allows_new_version_that_reuses_old_evidence(tmp_path):
     )] == [1, 2]
 
 
+def test_source_evidence_is_not_a_write_identity(tmp_path):
+    store = DurableMemoryStore(Database(str(tmp_path / "evidence-not-identity.db")))
+    original = store.create(make_record())
+
+    updated = store.update(
+        update_operation(value="MySQL", expected_version=1),
+        source_seq=2,
+        source_event_id="event-1",
+    )
+
+    assert updated.version == 2
+    assert updated.value == "MySQL"
+
+
+def test_replaying_v1_write_identity_does_not_match_v2_evidence(tmp_path):
+    store = DurableMemoryStore(Database(str(tmp_path / "identity-vs-evidence.db")))
+    original = store.create(make_record(), source_event_id="write-v1")
+    v2 = make_record(value="MySQL", source_seq=2, version=2, memory_id=original.id).model_copy(
+        update={
+            "source": MemorySource(
+                type="extractor",
+                event_ids=["write-v1", "evidence-v2"],
+                stream_id="legacy",
+            )
+        }
+    )
+    store.create(v2, source_event_id="write-v2")
+
+    replay = original.model_copy(
+        update={"created_at": datetime(2026, 1, 2, tzinfo=timezone.utc),
+                "updated_at": datetime(2026, 1, 2, tzinfo=timezone.utc)}
+    )
+    replayed = store.create(replay, source_event_id="write-v1")
+    assert replayed.id == original.id
+    assert replayed.version == 1
+    assert replayed.value == original.value
+    assert store.get_active(MemoryScope.USER, "u1", original.key).value == "MySQL"
+
+
+def test_write_identity_conflict_is_rejected_across_memory_keys(tmp_path):
+    store = DurableMemoryStore(Database(str(tmp_path / "identity-conflict.db")))
+    store.create(make_record(key="database.engine"), source_event_id="write-1")
+
+    with pytest.raises(StaleWriteError, match="different memory"):
+        store.create(
+            make_record(key="database.host", source_seq=1),
+            source_event_id="write-1",
+        )
+
+
+def test_write_identity_registry_survives_reopen(tmp_path):
+    path = str(tmp_path / "identity-reopen.db")
+    store = DurableMemoryStore(Database(path))
+    original = store.create(make_record(), source_event_id="write-1")
+    reopened = DurableMemoryStore(Database(path))
+
+    replay = original.model_copy(update={"updated_at": datetime(2026, 1, 2, tzinfo=timezone.utc)})
+    assert reopened.create(replay, source_event_id="write-1") == original
+    assert [item.version for item in reopened.list_versions(
+        MemoryScope.USER, "u1", original.key
+    )] == [1]
+
+
 def test_durable_updates_from_different_streams_do_not_compare_seq_numbers(tmp_path):
     store = DurableMemoryStore(Database(str(tmp_path / "source-streams.db")))
     original = store.create(
@@ -200,7 +263,7 @@ def test_source_event_replay_requires_the_same_stream_identity(tmp_path):
 
 def test_create_rejects_source_event_conflict_and_memory_id_change(tmp_path):
     store = DurableMemoryStore(Database(str(tmp_path / "create-conflict.db")))
-    original = store.create(make_record())
+    original = store.create(make_record(), source_event_id="event-1")
 
     conflicting_source = make_record(
         value="MySQL", source_seq=2, version=2, memory_id=original.id
@@ -315,6 +378,30 @@ def test_update_replay_by_source_event_is_idempotent(tmp_path):
     assert [item.version for item in store.list_versions(
         MemoryScope.USER, "u1", "database.engine"
     )] == [1, 2]
+
+
+def test_update_replay_remains_idempotent_after_later_version(tmp_path):
+    store = DurableMemoryStore(Database(str(tmp_path / "update-replay-history.db")))
+    store.create(make_record())
+    first_id = uuid4()
+    first = store.update(
+        update_operation(value="MySQL", expected_version=1),
+        source_seq=2,
+        source_event_id=first_id,
+    )
+    store.update(
+        update_operation(value="SQLite", expected_version=2),
+        source_seq=3,
+        source_event_id=uuid4(),
+    )
+
+    replay = store.update(
+        update_operation(value="MySQL", expected_version=1),
+        source_seq=2,
+        source_event_id=first_id,
+    )
+    assert replay.version == first.version
+    assert replay.value == first.value
 
 
 def test_update_replay_rejects_changed_version_or_source_sequence(tmp_path):
@@ -460,7 +547,7 @@ def test_forget_requires_expected_version_and_rejects_stale_delete(tmp_path):
 
 def test_forget_rejects_reuse_of_source_event_from_another_version(tmp_path):
     store = DurableMemoryStore(Database(str(tmp_path / "forget-source-conflict.db")))
-    store.create(make_record())
+    store.create(make_record(), source_event_id="event-1")
 
     with pytest.raises(StaleWriteError, match="different memory operation"):
         store.forget(

@@ -22,7 +22,11 @@ from .models import (
     OperationType,
 )
 from .storage.ports import RelationalDatabase
-from .storage.schema import durable_memories_table, durable_memory_identities_table
+from .storage.schema import (
+    durable_memories_table,
+    durable_memory_identities_table,
+    durable_memory_writes_table,
+)
 
 
 def _validate_json_value(value: Any, path: str = "value") -> None:
@@ -75,8 +79,6 @@ class DurableMemoryStore:
         source_updates = {}
         if source_stream_id != source.stream_id:
             source_updates["stream_id"] = source_stream_id
-        if source_event_id is not None and source_event_id not in source.event_ids:
-            source_updates["event_ids"] = [*source.event_ids, source_event_id]
         if source_updates:
             record = record.model_copy(
                 update={"source": source.model_copy(update=source_updates)}
@@ -84,12 +86,13 @@ class DurableMemoryStore:
         with self._transaction() as connection:
             source_match = None
             if source_event_id is not None:
-                source_match = self._find_source_match(
+                source_match = self._find_write_match(
                     connection,
                     record.scope,
                     record.scope_id,
                     record.key,
-                    [source_event_id],
+                    source_stream_id,
+                    source_event_id,
                 )
             if source_match is not None:
                 if self._same_record_content(source_match, record):
@@ -127,7 +130,15 @@ class DurableMemoryStore:
                     raise StaleWriteError(
                         "memory version changed concurrently; retry the create"
                     )
-            self._insert_record(connection, record)
+            if source_event_id is None:
+                self._insert_record(connection, record)
+            else:
+                self._insert_record(
+                    connection,
+                    record,
+                    write_stream_id=source_stream_id,
+                    write_event_id=source_event_id,
+                )
             return record
 
     def update(
@@ -148,12 +159,13 @@ class DurableMemoryStore:
             raise ValueError("durable write requires source_stream_id")
         with self._transaction() as connection:
             if source_event_id is not None:
-                source_match = self._find_source_match(
+                source_match = self._find_write_match(
                     connection,
                     operation.scope,
                     operation.scope_id,
                     operation.key,
-                    [str(source_event_id)],
+                    source_stream_id,
+                    source_event_id,
                 )
                 if source_match is not None:
                     expected_kind = operation.kind or source_match.kind
@@ -162,7 +174,8 @@ class DurableMemoryStore:
                         and operation.expected_version == source_match.version - 1
                         and source_seq == source_match.source_seq
                         and source_stream_id == source_match.source.stream_id
-                        and source_match.status is MemoryStatus.ACTIVE
+                        and source_match.status
+                        in {MemoryStatus.ACTIVE, MemoryStatus.SUPERSEDED}
                         and source_match.value == operation.value
                         and source_match.kind is expected_kind
                     ):
@@ -195,14 +208,21 @@ class DurableMemoryStore:
                 latest,
                 operation,
                 source_seq=source_seq,
-                source_event_id=source_event_id,
                 source_stream_id=source_stream_id,
             )
             if not self._supersede_latest(connection, latest):
                 raise StaleWriteError(
                     "memory version changed concurrently; retry the update"
                 )
-            self._insert_record(connection, record)
+            if source_event_id is None:
+                self._insert_record(connection, record)
+            else:
+                self._insert_record(
+                    connection,
+                    record,
+                    write_stream_id=source_stream_id,
+                    write_event_id=source_event_id,
+                )
             return record
 
     def forget(
@@ -223,22 +243,22 @@ class DurableMemoryStore:
             raise ValueError("durable write requires source_stream_id")
         with self._transaction() as connection:
             if source_event_id is not None:
-                source_key = operation.key
-                if source_key is None and operation.memory_id is not None:
-                    source_key = self._key_for_memory_id(
-                        connection,
-                        operation.scope,
-                        operation.scope_id,
-                        operation.memory_id,
-                    )
-                source_match = self._find_source_match(
+                source_match = self._find_write_match(
                     connection,
                     operation.scope,
                     operation.scope_id,
-                    source_key,
-                    [str(source_event_id)],
+                    operation.key,
+                    source_stream_id,
+                    source_event_id,
                 )
                 if source_match is not None:
+                    if (
+                        operation.memory_id is not None
+                        and source_match.id != operation.memory_id
+                    ):
+                        raise StaleWriteError(
+                            "source event already applied to a different memory operation"
+                        )
                     if source_match.status is MemoryStatus.RETRACTED:
                         if (
                             operation.expected_version == source_match.version - 1
@@ -286,7 +306,6 @@ class DurableMemoryStore:
             tombstone = self._tombstone_record(
                 latest,
                 source_seq=source_seq,
-                source_event_id=source_event_id,
                 source=operation.source,
                 source_stream_id=source_stream_id,
             )
@@ -294,7 +313,15 @@ class DurableMemoryStore:
                 raise StaleWriteError(
                     "memory version changed concurrently; retry the forget"
                 )
-            self._insert_record(connection, tombstone)
+            if source_event_id is None:
+                self._insert_record(connection, tombstone)
+            else:
+                self._insert_record(
+                    connection,
+                    tombstone,
+                    write_stream_id=source_stream_id,
+                    write_event_id=source_event_id,
+                )
             return tombstone
 
     @contextmanager
@@ -442,44 +469,57 @@ class DurableMemoryStore:
         return None if row is None else DurableMemoryStore._row_to_record(row)
 
     @staticmethod
-    def _find_source_match(
-        connection, scope, scope_id: str, key: str | None, event_ids
-    ):
-        """Find a prior version carrying one of the source evidence IDs.
+    def _find_write_match(
+        connection,
+        scope,
+        scope_id: str,
+        key: str | None,
+        write_stream_id: str,
+        write_event_id: str,
+    ) -> MemoryRecord | None:
+        """Find the version bound to an explicit write identity.
 
-        Source evidence is stored as structured JSON rather than a separate
-        idempotency table.  Reading the small per-key history keeps the
-        authority portable across relational backends and makes replay
-        semantics independent of the caller's in-memory record instance.
+        ``MemorySource.event_ids`` are evidence and may be reused by later
+        versions.  Only this registry is authoritative for write replay.
         """
-        wanted = {str(event_id) for event_id in event_ids}
-        if not wanted:
-            return None
-        rows = connection.execute(
-            select(durable_memories_table)
-            .where(
-                durable_memories_table.c.scope == scope.value,
-                durable_memories_table.c.scope_id == scope_id,
-                durable_memories_table.c.key == key,
-            )
-            .order_by(durable_memories_table.c.version.desc())
-        ).mappings().all()
-        for row in rows:
-            source = json.loads(row["source_json"])
-            if wanted.intersection(str(item) for item in source.get("event_ids", [])):
-                return DurableMemoryStore._row_to_record(row)
-        return None
-
-    @staticmethod
-    def _key_for_memory_id(connection, scope, scope_id: str, memory_id: UUID | str):
         row = connection.execute(
-            select(durable_memory_identities_table.c.key).where(
-                durable_memory_identities_table.c.scope == scope.value,
-                durable_memory_identities_table.c.scope_id == scope_id,
-                durable_memory_identities_table.c.memory_id == str(memory_id),
+            select(durable_memory_writes_table).where(
+                durable_memory_writes_table.c.write_stream_id == write_stream_id,
+                durable_memory_writes_table.c.write_event_id == str(write_event_id),
             )
-        ).first()
-        return None if row is None else row[0]
+        ).mappings().first()
+        if row is None:
+            other_stream = connection.execute(
+                select(durable_memory_writes_table.c.write_stream_id).where(
+                    durable_memory_writes_table.c.write_event_id == str(write_event_id)
+                )
+            ).first()
+            if other_stream is not None:
+                raise StaleWriteError(
+                    "source event identity was replayed from a different stream"
+                )
+            return None
+        if (
+            row["scope"] != scope.value
+            or row["scope_id"] != scope_id
+            or (key is not None and row["key"] != key)
+        ):
+            raise StaleWriteError(
+                "write event identity is bound to a different memory"
+            )
+        record_row = connection.execute(
+            select(durable_memories_table).where(
+                durable_memories_table.c.scope == row["scope"],
+                durable_memories_table.c.scope_id == row["scope_id"],
+                durable_memories_table.c.key == row["key"],
+                durable_memories_table.c.version == row["version"],
+            )
+        ).mappings().first()
+        if record_row is None:
+            raise StaleWriteError(
+                "write event identity points to a missing memory version"
+            )
+        return DurableMemoryStore._row_to_record(record_row)
 
     @staticmethod
     def _find_forget_target(connection, operation: MemoryOperation):
@@ -523,7 +563,13 @@ class DurableMemoryStore:
             and left.scope_id == right.scope_id
             and left.key == right.key
             and left.value == right.value
-            and left.status is right.status
+            and (
+                left.status is right.status
+                or (
+                    left.status is MemoryStatus.SUPERSEDED
+                    and right.status is MemoryStatus.ACTIVE
+                )
+            )
             and left.confidence == right.confidence
             and left.source.stream_id == right.source.stream_id
             and left.source_seq == right.source_seq
@@ -548,7 +594,13 @@ class DurableMemoryStore:
         return result.rowcount == 1
 
     @staticmethod
-    def _insert_record(connection, record: MemoryRecord) -> None:
+    def _insert_record(
+        connection,
+        record: MemoryRecord,
+        *,
+        write_stream_id: str | None = None,
+        write_event_id: str | None = None,
+    ) -> None:
         identity_by_id = connection.execute(
             select(durable_memory_identities_table).where(
                 durable_memory_identities_table.c.scope == record.scope.value,
@@ -599,6 +651,19 @@ class DurableMemoryStore:
                 updated_at=record.updated_at.isoformat(),
             )
         )
+        if write_stream_id is not None or write_event_id is not None:
+            if write_stream_id is None or write_event_id is None:
+                raise ValueError("write identity requires both stream and event IDs")
+            connection.execute(
+                insert(durable_memory_writes_table).values(
+                    scope=record.scope.value,
+                    scope_id=record.scope_id,
+                    key=record.key,
+                    version=record.version,
+                    write_stream_id=write_stream_id,
+                    write_event_id=str(write_event_id),
+                )
+            )
 
     @staticmethod
     def _updated_record(
@@ -606,13 +671,11 @@ class DurableMemoryStore:
         operation: MemoryOperation,
         *,
         source_seq: int,
-        source_event_id: UUID | str | None,
         source_stream_id: str | None,
     ) -> MemoryRecord:
         source = DurableMemoryStore._operation_source(
             operation,
             source_seq=source_seq,
-            source_event_id=source_event_id,
             source_stream_id=source_stream_id,
         )
         return MemoryRecord(
@@ -636,7 +699,6 @@ class DurableMemoryStore:
         latest: MemoryRecord,
         *,
         source_seq: int,
-        source_event_id: UUID | str | None,
         source: MemorySource | None,
         source_stream_id: str | None,
     ) -> MemoryRecord:
@@ -644,8 +706,7 @@ class DurableMemoryStore:
             type="explicit",
             event_ids=[
                 str(
-                    source_event_id
-                    or uuid5(
+                    uuid5(
                         NAMESPACE_URL,
                         f"memweave:durable-forget:{latest.id}:{source_seq}",
                     )
@@ -659,13 +720,6 @@ class DurableMemoryStore:
         ):
             resolved_source = resolved_source.model_copy(
                 update={"stream_id": source_stream_id}
-            )
-        if source_event_id is not None and str(source_event_id) not in resolved_source.event_ids:
-            resolved_source = MemorySource(
-                type=resolved_source.type,
-                event_ids=[*resolved_source.event_ids, str(source_event_id)],
-                extractor=resolved_source.extractor,
-                stream_id=resolved_source.stream_id,
             )
         return MemoryRecord(
             id=latest.id,
@@ -688,15 +742,13 @@ class DurableMemoryStore:
         operation: MemoryOperation,
         *,
         source_seq: int,
-        source_event_id: UUID | str | None,
         source_stream_id: str | None,
     ) -> MemorySource:
         source = operation.source or MemorySource(
             type="explicit",
             event_ids=[
                 str(
-                    source_event_id
-                    or uuid5(
+                    uuid5(
                         NAMESPACE_URL,
                         f"memweave:durable-update:{operation.scope.value}:"
                         f"{operation.scope_id}:{operation.key}:{source_seq}",
@@ -710,13 +762,6 @@ class DurableMemoryStore:
             and source.stream_id != source_stream_id
         ):
             source = source.model_copy(update={"stream_id": source_stream_id})
-        if source_event_id is not None and str(source_event_id) not in source.event_ids:
-            source = MemorySource(
-                type=source.type,
-                event_ids=[*source.event_ids, str(source_event_id)],
-                extractor=source.extractor,
-                stream_id=source.stream_id,
-            )
         return source
 
     @staticmethod

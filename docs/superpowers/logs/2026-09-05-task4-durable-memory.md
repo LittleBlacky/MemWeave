@@ -49,9 +49,12 @@
 - 身份注册表现在同时约束两个方向：同一作用域内 `memory_id` 不能跨 key 重用，
   同一 key 也不能在版本链中更换 `memory_id`。迁移回填发现任一方向存在历史冲突
   都会失败；写入路径也在插入前显式拒绝，避免只依赖数据库唯一约束异常。
-- `create()` 现在把 `source_event_id` 与 `MemorySource.event_ids` 分开处理：前者是
-  本次写入的幂等身份，后者是可跨版本复用的证据集合。新版本引用旧证据时不会再被
-  误判为重复写入；传入的写入事件 ID 会被补入持久化来源，保证审计可追溯。
+- `source_event_id` 与 `MemorySource.event_ids` 分开持久化：前者是本次写入的幂等身份，
+  后者是可跨版本复用的证据集合。新增 `durable_memory_writes` 注册表，以
+  `(write_stream_id, write_event_id)` 绑定具体的 `(scope, scope_id, key, version)`；
+  该绑定与版本记录在同一事务中提交。新版本引用旧证据时不会再被误判为重复写入，
+  历史来源证据也不会被反向当作写入身份。历史记录不回填该注册表，因为无法安全
+  判断旧证据中的哪一个事件真正执行了写入。
 - `MemorySource` 增加可选 `stream_id` 保存来源位置。长期版本只在同一 stream 内
   比较 `source_seq`；跨 stream 不再用无意义的整数大小判断新旧，而由
   `expected_version`/CAS 和上层 Resolver 处理。source event 重放同时校验 stream
@@ -61,10 +64,10 @@
 
 ```text
 G:\\Anaconda\\envs\\smallshrimp\\python.exe -m pytest tests/test_durable_versions.py -q
-22 passed
+29 passed
 
 G:\\Anaconda\\envs\\smallshrimp\\python.exe -m pytest -q
-188 passed
+193 passed
 
 G:\\Anaconda\\envs\\smallshrimp\\python.exe -m compileall -q src
 git diff --check

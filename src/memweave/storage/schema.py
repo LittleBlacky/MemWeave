@@ -138,6 +138,29 @@ durable_memory_identities_table = Table(
     ),
 )
 
+durable_memory_writes_table = Table(
+    "durable_memory_writes",
+    metadata,
+    Column("scope", String(32), nullable=False),
+    Column("scope_id", String(255), nullable=False),
+    Column("key", String(512), nullable=False),
+    Column("version", Integer, nullable=False),
+    Column("write_stream_id", String(512), nullable=False),
+    Column("write_event_id", String(512), nullable=False),
+    UniqueConstraint(
+        "scope",
+        "scope_id",
+        "key",
+        "version",
+        name="pk_durable_memory_write_version",
+    ),
+    UniqueConstraint(
+        "write_stream_id",
+        "write_event_id",
+        name="uq_durable_memory_write_event",
+    ),
+)
+
 schema_migrations_table = Table(
     "schema_migrations",
     metadata,
