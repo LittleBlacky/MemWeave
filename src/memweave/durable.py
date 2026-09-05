@@ -331,7 +331,9 @@ class DurableMemoryStore:
                 .limit(1)
             ).mappings().first()
             by_id = None if row is None else DurableMemoryStore._row_to_record(row)
-        if by_key is not None and by_id is not None and by_key.key != by_id.key:
+        if by_key is not None and by_id is not None and (
+            by_key.key != by_id.key or by_key.id != by_id.id
+        ):
             raise ValueError("memory key and memory_id identify different memories")
         if operation.key is not None and by_key is None and operation.memory_id is not None:
             raise ValueError("memory key and memory_id identify different memories")

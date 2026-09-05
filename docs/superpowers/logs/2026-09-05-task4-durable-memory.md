@@ -24,6 +24,8 @@
 - 并发更新和删除改用带 `version`、`key`、`active` 状态条件的 CAS 更新；条件更新
   影响行数为零时返回 `StaleWriteError`，不插入新版本。唯一版本约束产生的
   `IntegrityError` 也统一转换为 `StaleWriteError`，调用方不再依赖底层数据库异常类型。
+- `forget()` 同时收到 `key` 和 `memory_id` 时现在比较完整记忆身份；即使历史数据中
+  出现同 key 的不同 ID，也会拒绝请求，不会静默删除错误版本。
 
 ## 验证
 

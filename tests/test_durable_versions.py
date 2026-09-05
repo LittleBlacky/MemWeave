@@ -238,6 +238,24 @@ def test_forget_rejects_reuse_of_source_event_from_another_version(tmp_path):
         )
 
 
+def test_forget_rejects_same_key_with_different_memory_id(tmp_path):
+    store = DurableMemoryStore(Database(str(tmp_path / "forget-identity-conflict.db")))
+    original = store.create(make_record())
+    legacy = make_record(
+        value="MySQL", source_seq=2, version=2, memory_id=uuid4()
+    )
+    with store.database.begin() as connection:
+        DurableMemoryStore._insert_record(connection, legacy)
+
+    with pytest.raises(ValueError, match="different memories"):
+        store.forget(
+            forget_operation(key=legacy.key, memory_id=original.id),
+            source_seq=3,
+        )
+
+    assert store.get_active(MemoryScope.USER, "u1", legacy.key) == legacy
+
+
 def test_newer_create_can_replace_tombstone(tmp_path):
     store = DurableMemoryStore(Database(str(tmp_path / "restore.db")))
     original = store.create(make_record())
