@@ -238,6 +238,22 @@ def test_forget_creates_tombstone_and_is_idempotent(tmp_path):
     assert history[0].id == original.id
 
 
+def test_forget_requires_expected_version_and_rejects_stale_delete(tmp_path):
+    store = DurableMemoryStore(Database(str(tmp_path / "forget-version.db")))
+    store.create(make_record())
+
+    with pytest.raises(ValueError, match="expected_version"):
+        store.forget(forget_operation(expected_version=None), source_seq=2)
+
+    store.update(update_operation(value="MySQL", expected_version=1), source_seq=2)
+    with pytest.raises(StaleWriteError, match="expected memory version"):
+        store.forget(forget_operation(expected_version=1), source_seq=3)
+
+    current = store.get_active(MemoryScope.USER, "u1", "database.engine")
+    assert current is not None
+    assert current.value == "MySQL"
+
+
 def test_forget_rejects_reuse_of_source_event_from_another_version(tmp_path):
     store = DurableMemoryStore(Database(str(tmp_path / "forget-source-conflict.db")))
     store.create(make_record())
@@ -261,7 +277,9 @@ def test_forget_rejects_same_key_with_different_memory_id(tmp_path):
 
     with pytest.raises(ValueError, match="different memories"):
         store.forget(
-            forget_operation(key=legacy.key, memory_id=original.id),
+            forget_operation(
+                key=legacy.key, memory_id=original.id, expected_version=2
+            ),
             source_seq=3,
         )
 

@@ -431,7 +431,7 @@ memory_version：同一 memory_key 的版本
 scope_revision：项目/团队/租户共享状态的并发修订号
 ~~~
 
-同一个 memory_key 更新时使用乐观锁：提交必须携带读取到的 memory_version；版本不匹配则重新读取并运行 Resolver。跨会话同时修改时，不按请求完成时间判断新旧，而按来源可信度、用户确认、有效时间和冲突策略处理。无法安全合并时，生成 conflict 记录并进入 needs_confirmation。
+同一个 memory_key 的更新和删除都使用乐观锁：提交必须携带读取到的 memory_version；版本不匹配则拒绝操作（更新可重新读取并运行 Resolver，删除不得静默重试）。跨会话同时修改时，不按请求完成时间判断新旧，而按来源可信度、用户确认、有效时间和冲突策略处理。无法安全合并时，生成 conflict 记录并进入 needs_confirmation。
 
 ## 14. 事务与跨系统一致性边界
 

@@ -242,8 +242,10 @@ class DurableMemoryStore:
             raise TypeError("operation must be a MemoryOperation")
         if operation.operation is not expected:
             raise ValueError(f"durable store requires {expected.value} operation")
-        if expected is OperationType.UPDATE and operation.expected_version is None:
-            raise ValueError("durable update requires expected_version")
+        if expected in (OperationType.UPDATE, OperationType.FORGET) and operation.expected_version is None:
+            raise ValueError(
+                f"durable {expected.value} requires expected_version"
+            )
         cls._validate_scope_args(operation.scope, operation.scope_id, operation.key)
 
     @staticmethod
