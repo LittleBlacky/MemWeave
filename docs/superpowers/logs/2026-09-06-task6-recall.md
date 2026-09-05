@@ -13,12 +13,13 @@
 - Durable 读取失败时保留会话结果并返回 `degraded=True`。
 - `DurableMemoryStore.list_active()` 通过权威版本链返回某作用域的 active 记录。
 - 不把记忆记录的 `source_seq` 冒充 Durable Projection watermark；当前 durable 水位保持未知，等待后续明确的水位接口。
+- Provider/派生索引命中必须与当前权威记录的 memory_id、作用域、key 和 version 一致；旧版本和 tombstone 命中会被过滤。
 
 ## 验证
 
 ```text
 python -m pytest tests/test_recall.py -q
-5 passed; full suite 216 passed
+6 passed; full suite 217 passed
 ```
 
 ## 边界

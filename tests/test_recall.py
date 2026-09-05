@@ -207,3 +207,36 @@ def test_durable_failure_returns_session_fallback(tmp_path):
 
     assert [item.value for item in result.items] == ["SQLite"]
     assert result.degraded is True
+
+
+def test_stale_provider_hit_cannot_bypass_durable_tombstone(tmp_path):
+    database = Database(str(tmp_path / "recall.db"))
+    session = SessionStore(database)
+    durable = DurableMemoryStore(database)
+    created = durable.create(
+        record(scope=MemoryScope.USER, scope_id="u1", key="database.engine", value="PostgreSQL"),
+        source_event_id=uuid4(),
+        source_stream_id="user:u1",
+    )
+    durable.forget(
+        MemoryOperation(
+            operation=OperationType.FORGET,
+            scope=MemoryScope.USER,
+            scope_id="u1",
+            key="database.engine",
+            memory_id=created.id,
+            expected_version=1,
+        ),
+        source_seq=2,
+        source_event_id=uuid4(),
+        source_stream_id="user:u1",
+    )
+
+    class StaleProvider:
+        def search(self, _request):
+            return [created]
+
+    result = RecallService(session, durable, provider=StaleProvider()).recall(request())
+
+    assert result.items == []
+    assert result.degraded is False

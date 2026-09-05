@@ -48,6 +48,7 @@ class RecallService:
         visible = self._visible_scopes(request)
         degraded = False
         candidates: list[MemoryRecord] = []
+        authoritative: list[MemoryRecord] = []
 
         session_scope = f"{MemoryScope.SESSION.value}:{request.session_id}"
         session_watermark = 0
@@ -55,12 +56,7 @@ class RecallService:
             state = self.session_store.get(request.session_id, stream_id=session_scope)
             session_watermark = state.last_seq
             candidates.extend(state.active_memories)
-
-        if self.provider is not None:
-            try:
-                candidates.extend(self.provider.search(request))
-            except Exception:
-                degraded = True
+            authoritative.extend(state.active_memories)
 
         if self.durable_store is not None:
             for scope_ref in visible:
@@ -70,8 +66,18 @@ class RecallService:
                 try:
                     records = self.durable_store.list_active(scope, scope_id)
                     candidates.extend(records)
+                    authoritative.extend(records)
                 except Exception:
                     degraded = True
+
+        if self.provider is not None:
+            try:
+                provider_records = self.provider.search(request)
+                candidates.extend(
+                    self._validated_provider_records(provider_records, authoritative)
+                )
+            except Exception:
+                degraded = True
 
         items = self._rank_and_merge(candidates, request)
         return RecallResult(
@@ -82,6 +88,38 @@ class RecallService:
             consistency=request.consistency,
             degraded=degraded,
         )
+
+    @staticmethod
+    def _validated_provider_records(
+        records: list[MemoryRecord], authoritative: list[MemoryRecord]
+    ) -> list[MemoryRecord]:
+        """Accept index hits only when they match the current authority.
+
+        Search indexes are eventually consistent. A hit with an old version,
+        or a hit whose memory has been tombstoned, must never bypass the
+        authoritative projection during recall.
+        """
+        by_id = {record.id: record for record in authoritative}
+        by_key = {(record.scope, record.scope_id, record.key): record for record in authoritative}
+        validated: list[MemoryRecord] = []
+        for record in records:
+            if not isinstance(record, MemoryRecord):
+                continue
+            current = by_id.get(record.id)
+            if current is None:
+                current = by_key.get((record.scope, record.scope_id, record.key))
+            if current is None:
+                continue
+            if (
+                current.status is MemoryStatus.ACTIVE
+                and record.status is current.status
+                and record.scope is current.scope
+                and record.scope_id == current.scope_id
+                and record.key == current.key
+                and record.version == current.version
+            ):
+                validated.append(record)
+        return validated
 
     @staticmethod
     def _parse_scope(value: str) -> tuple[MemoryScope, str]:
