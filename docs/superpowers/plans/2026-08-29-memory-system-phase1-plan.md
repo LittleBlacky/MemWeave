@@ -10,6 +10,8 @@
 
 **Spec:** docs/superpowers/specs/2026-08-29-memory-system-design.md
 
+**Roadmap:** docs/superpowers/plans/2026-09-memory-system-roadmap.md
+
 **Development logs:** Each task must create or update `docs/superpowers/logs/YYYY-MM-DD-taskN-<name>.md`, recording scope, decisions, TDD red/green evidence, verification commands, commit hash, and known risks. The log is part of the task deliverable.
 
 ## Global Constraints

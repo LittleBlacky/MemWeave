@@ -3,6 +3,8 @@
 > Phase 2 builds automated semantic memory on top of the reliable Phase 1 substrate. It does not
 > implement Skill execution or unrestricted Agent self-modification.
 
+**Roadmap:** docs/superpowers/plans/2026-09-memory-system-roadmap.md
+
 ## Goal
 
 Turn ordinary Agent events into governed, evidence-backed memory candidates and make those memories

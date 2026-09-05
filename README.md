@@ -40,6 +40,7 @@ Agent 只通过受控接口参与
 ## 文档
 
 - [系统设计规格](docs/superpowers/specs/2026-08-29-memory-system-design.md)
+- [总体路线计划](docs/superpowers/plans/2026-09-memory-system-roadmap.md)
 - [开发规范](CONTRIBUTING.md)
 
 ## 开发环境
