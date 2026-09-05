@@ -671,6 +671,16 @@ def test_forget_requires_expected_version_and_rejects_stale_delete(tmp_path):
     assert current.value == "MySQL"
 
 
+def test_forget_missing_target_fails_instead_of_silently_succeeding(tmp_path):
+    store = DurableMemoryStore(Database(str(tmp_path / "forget-missing.db")))
+    operation = forget_operation(key="missing", expected_version=1)
+
+    with pytest.raises(StaleWriteError, match="missing durable memory target"):
+        store.forget(operation, source_seq=1, source_event_id="delete-1")
+
+    assert store.get_active(MemoryScope.USER, "u1", "missing") is None
+
+
 def test_forget_rejects_reuse_of_source_event_from_another_version(tmp_path):
     store = DurableMemoryStore(Database(str(tmp_path / "forget-source-conflict.db")))
     store.create(make_record(), source_event_id="event-1")

@@ -59,6 +59,9 @@
   业务请求、来源 stream/seq 和 `MemorySource`，排除易变时间戳；相同写入身份只有在
   指纹完全一致时才幂等返回。来源、操作类型、目标版本或内容发生变化都会抛出
   `StaleWriteError`；旧表中无法恢复指纹的身份采用失败关闭策略，不静默接受重放。
+- `forget()` 的目标不存在时现在按带 `expected_version` 的 CAS 语义失败，并抛出
+  `StaleWriteError`；不再返回无审计的 `None`，避免调用方误判删除成功或让后续新建
+  记忆绕过一次未记录的删除。
 - `MemorySource` 增加可选 `stream_id` 保存来源位置。长期版本只在同一 stream 内
   比较 `source_seq`；跨 stream 不再用无意义的整数大小判断新旧，而由
   `expected_version`/CAS 和上层 Resolver 处理。source event 重放同时校验 stream
@@ -68,10 +71,10 @@
 
 ```text
 G:\\Anaconda\\envs\\smallshrimp\\python.exe -m pytest tests/test_durable_versions.py -q
-33 passed
+36 passed
 
 G:\\Anaconda\\envs\\smallshrimp\\python.exe -m pytest -q
-196 passed
+201 passed
 
 G:\\Anaconda\\envs\\smallshrimp\\python.exe -m compileall -q src
 git diff --check

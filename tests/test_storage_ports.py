@@ -88,6 +88,25 @@ def test_default_migration_runner_discovers_packaged_migrations():
     ]
 
 
+def test_durable_write_fingerprint_migration_is_safe_on_existing_0014_schema(tmp_path):
+    database = SQLAlchemyDatabase(f"sqlite+pysqlite:///{tmp_path / 'write-fingerprint.db'}")
+    database.apply_migrations()
+    with database.begin() as connection:
+        connection.execute(
+            delete(schema_migrations_table).where(
+                schema_migrations_table.c.version == "0015_durable_write_fingerprints"
+            )
+        )
+
+    assert database.apply_migrations() == ["0015_durable_write_fingerprints"]
+    with database.read() as connection:
+        columns = {
+            column["name"]
+            for column in inspect(connection).get_columns("durable_memory_writes")
+        }
+    assert {"operation_type", "request_fingerprint"}.issubset(columns)
+
+
 def test_migration_runner_applied_returns_empty_only_when_table_is_missing(tmp_path):
     database = SQLAlchemyDatabase(f"sqlite+pysqlite:///{tmp_path / 'unmigrated.db'}")
     runner = MigrationRunner()

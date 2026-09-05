@@ -249,7 +249,7 @@ class DurableMemoryStore:
         source_seq: int | None = None,
         source_event_id: UUID | str | None = None,
         source_stream_id: str | None = None,
-    ) -> MemoryRecord | None:
+    ) -> MemoryRecord:
         self._validate_operation(operation, OperationType.FORGET)
         source_seq = self._validate_source_seq(source_seq)
         source_event_id = self._validate_source_event_id(source_event_id)
@@ -296,7 +296,9 @@ class DurableMemoryStore:
                     )
             latest = self._find_forget_target(connection, operation)
             if latest is None:
-                return None
+                raise StaleWriteError(
+                    "cannot forget a missing durable memory target"
+                )
             if latest.status is MemoryStatus.RETRACTED:
                 if operation.expected_version != latest.version - 1:
                     raise StaleWriteError(
