@@ -136,6 +136,8 @@ needs_confirmation
 长期权威存储只接受已经通过策略确认的 `active` 记录。`candidate` 和
 `needs_confirmation` 保留在候选/审核流程中，不得在写入长期版本链时替代已有的
 `active` 版本；`superseded`、`retracted` 和 `expired` 只能由对应的生命周期操作产生。
+长期记忆的 `value` 使用严格 JSON 原生值，以保证数据库重启前后类型稳定；UUID、时间
+对象和其它自定义类型必须由上层先规范化为字符串或 JSON 结构，不能由存储层隐式转换。
 
 投影不等于数据库。一个投影可以使用多个数据库，一个数据库也可以承载多个投影；Core 通过存储端口和 `StorageCoordinator` 管理这种组合。
 

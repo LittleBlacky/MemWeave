@@ -1,6 +1,7 @@
 """Versioned durable memory authority with tombstone masking."""
 
 import json
+import math
 from contextlib import contextmanager
 from datetime import datetime
 from typing import Any, Iterator
@@ -24,10 +25,30 @@ from .storage.ports import RelationalDatabase
 from .storage.schema import durable_memories_table
 
 
-def _json_default(value: Any) -> str:
-    if isinstance(value, (UUID, datetime)):
-        return str(value)
-    raise TypeError("durable memory value contains a non-serializable value")
+def _validate_json_value(value: Any, path: str = "value") -> None:
+    """Require values that round-trip identically through JSON storage."""
+    if value is None or isinstance(value, (str, bool, int)):
+        return
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise ValueError(f"{path} must contain only finite numbers")
+        return
+    if isinstance(value, list):
+        for index, item in enumerate(value):
+            _validate_json_value(item, f"{path}[{index}]")
+        return
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if not isinstance(key, str):
+                raise TypeError(f"{path} object keys must be strings")
+            _validate_json_value(item, f"{path}.{key}")
+        return
+    raise TypeError(f"{path} must contain only JSON-native values")
+
+
+def _dump_json_value(value: Any) -> str:
+    _validate_json_value(value)
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False)
 
 
 class DurableMemoryStore:
@@ -238,6 +259,7 @@ class DurableMemoryStore:
                 "candidate and lifecycle transition states must use their "
                 "dedicated workflow"
             )
+        _validate_json_value(record.value)
 
     @classmethod
     def _validate_operation(
@@ -251,6 +273,8 @@ class DurableMemoryStore:
             raise ValueError(
                 f"durable {expected.value} requires expected_version"
             )
+        if expected is OperationType.UPDATE:
+            _validate_json_value(operation.value)
         cls._validate_scope_args(operation.scope, operation.scope_id, operation.key)
 
     @staticmethod
@@ -395,9 +419,7 @@ class DurableMemoryStore:
                 key=record.key,
                 version=record.version,
                 kind=record.kind.value,
-                value_json=json.dumps(
-                    record.value, sort_keys=True, separators=(",", ":"), default=_json_default
-                ),
+                value_json=_dump_json_value(record.value),
                 status=record.status.value,
                 confidence=record.confidence,
                 source_json=json.dumps(

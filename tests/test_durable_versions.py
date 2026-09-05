@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy.exc import IntegrityError
@@ -153,6 +153,26 @@ def test_create_requires_contiguous_versions(tmp_path):
     assert [item.version for item in store.list_versions(
         MemoryScope.USER, "u1", original.key
     )] == [1]
+
+
+def test_durable_values_are_strict_json_and_round_trip_after_reopen(tmp_path):
+    path = str(tmp_path / "value-roundtrip.db")
+    value = {"nested": [None, True, 3, 1.25, "text"]}
+    store = DurableMemoryStore(Database(path))
+    original = store.create(make_record(value=value))
+
+    reopened = DurableMemoryStore(Database(path))
+    assert reopened.get_active(MemoryScope.USER, "u1", original.key).value == value
+
+    for invalid in (UUID(int=0), ("tuple",), {"set-value"}):
+        with pytest.raises(TypeError, match="JSON-native"):
+            store.create(make_record(key=f"invalid-{type(invalid).__name__}", value=invalid))
+
+    with pytest.raises(TypeError, match="JSON-native"):
+        store.create(make_record(key="invalid-datetime", value=datetime.now(timezone.utc)))
+
+    with pytest.raises(ValueError, match="finite"):
+        store.create(make_record(key="invalid-nan", value=float("nan")))
 
 
 def test_update_requires_expected_version_when_supplied_and_rejects_stale_source(
