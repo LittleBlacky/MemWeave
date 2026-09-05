@@ -55,6 +55,10 @@
   该绑定与版本记录在同一事务中提交。新版本引用旧证据时不会再被误判为重复写入，
   历史来源证据也不会被反向当作写入身份。历史记录不回填该注册表，因为无法安全
   判断旧证据中的哪一个事件真正执行了写入。
+- 写入身份增加 `operation_type` 和 `request_fingerprint`。指纹覆盖规范化后的完整
+  业务请求、来源 stream/seq 和 `MemorySource`，排除易变时间戳；相同写入身份只有在
+  指纹完全一致时才幂等返回。来源、操作类型、目标版本或内容发生变化都会抛出
+  `StaleWriteError`；旧表中无法恢复指纹的身份采用失败关闭策略，不静默接受重放。
 - `MemorySource` 增加可选 `stream_id` 保存来源位置。长期版本只在同一 stream 内
   比较 `source_seq`；跨 stream 不再用无意义的整数大小判断新旧，而由
   `expected_version`/CAS 和上层 Resolver 处理。source event 重放同时校验 stream
@@ -64,10 +68,10 @@
 
 ```text
 G:\\Anaconda\\envs\\smallshrimp\\python.exe -m pytest tests/test_durable_versions.py -q
-29 passed
+33 passed
 
 G:\\Anaconda\\envs\\smallshrimp\\python.exe -m pytest -q
-193 passed
+196 passed
 
 G:\\Anaconda\\envs\\smallshrimp\\python.exe -m compileall -q src
 git diff --check

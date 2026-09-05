@@ -147,6 +147,8 @@ durable_memory_writes_table = Table(
     Column("version", Integer, nullable=False),
     Column("write_stream_id", String(512), nullable=False),
     Column("write_event_id", String(512), nullable=False),
+    Column("operation_type", String(32)),
+    Column("request_fingerprint", String(64)),
     UniqueConstraint(
         "scope",
         "scope_id",

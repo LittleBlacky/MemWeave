@@ -62,6 +62,7 @@ def test_sqlite_database_migrations_are_versioned_and_idempotent(tmp_path):
         "0012_durable_memories",
         "0013_durable_memory_identity",
         "0014_durable_memory_writes",
+        "0015_durable_write_fingerprints",
     ]
 
 
@@ -83,6 +84,7 @@ def test_default_migration_runner_discovers_packaged_migrations():
         "0012_durable_memories",
         "0013_durable_memory_identity",
         "0014_durable_memory_writes",
+        "0015_durable_write_fingerprints",
     ]
 
 
@@ -132,6 +134,7 @@ def test_generic_sqlalchemy_database_can_apply_core_migration(tmp_path):
         "0012_durable_memories",
         "0013_durable_memory_identity",
         "0014_durable_memory_writes",
+        "0015_durable_write_fingerprints",
     ]
     assert database.applied_migrations() == [
         "0001_core",
@@ -148,6 +151,7 @@ def test_generic_sqlalchemy_database_can_apply_core_migration(tmp_path):
         "0012_durable_memories",
         "0013_durable_memory_identity",
         "0014_durable_memory_writes",
+        "0015_durable_write_fingerprints",
     ]
 
 
@@ -192,6 +196,7 @@ def test_stream_identity_migration_upgrades_legacy_session_tables(tmp_path):
         "0012_durable_memories",
         "0013_durable_memory_identity",
         "0014_durable_memory_writes",
+        "0015_durable_write_fingerprints",
     ]
     with database.read() as connection:
         assert "stream_id" in {
@@ -328,6 +333,7 @@ def test_durable_identity_migration_backfills_versions_and_rejects_conflicts(tmp
         "0011_validate_session_receipts",
         "0012_durable_memories",
         "0014_durable_memory_writes",
+        "0015_durable_write_fingerprints",
     ]
 
     key_conflict_database = SQLAlchemyDatabase(
@@ -507,7 +513,7 @@ def test_stream_recovery_migration_resets_only_ambiguous_sessions(tmp_path):
             "('tenant:t/session:plain')"
         )
 
-    assert database.apply_migrations() == ["0007_session_stream_recovery", "0008_session_event_receipts", "0009_projection_event_receipts", "0010_validate_projection_receipts", "0011_validate_session_receipts", "0012_durable_memories", "0013_durable_memory_identity", "0014_durable_memory_writes"]
+    assert database.apply_migrations() == ["0007_session_stream_recovery", "0008_session_event_receipts", "0009_projection_event_receipts", "0010_validate_projection_receipts", "0011_validate_session_receipts", "0012_durable_memories", "0013_durable_memory_identity", "0014_durable_memory_writes", "0015_durable_write_fingerprints"]
     with database.read() as connection:
         assert connection.execute(
             text("SELECT COUNT(*) FROM session_states WHERE session_id = 'stream:legacy'")
@@ -546,7 +552,7 @@ def test_generic_sqlalchemy_database_migrations_are_safe_under_concurrent_startu
     with ThreadPoolExecutor(max_workers=8) as executor:
         results = list(executor.map(apply_migrations, range(8)))
 
-    assert sum(result == ["0001_core", "0002_outbox", "0003_outbox_consumer_receipts", "0004_session_states", "0005_session_command_leases", "0006_session_stream_identity", "0007_session_stream_recovery", "0008_session_event_receipts", "0009_projection_event_receipts", "0010_validate_projection_receipts", "0011_validate_session_receipts", "0012_durable_memories", "0013_durable_memory_identity", "0014_durable_memory_writes"] for result in results) == 1
+    assert sum(result == ["0001_core", "0002_outbox", "0003_outbox_consumer_receipts", "0004_session_states", "0005_session_command_leases", "0006_session_stream_identity", "0007_session_stream_recovery", "0008_session_event_receipts", "0009_projection_event_receipts", "0010_validate_projection_receipts", "0011_validate_session_receipts", "0012_durable_memories", "0013_durable_memory_identity", "0014_durable_memory_writes", "0015_durable_write_fingerprints"] for result in results) == 1
     assert sum(result == [] for result in results) == 7
     assert database.apply_migrations() == []
     assert database.applied_migrations() == [
@@ -564,6 +570,7 @@ def test_generic_sqlalchemy_database_migrations_are_safe_under_concurrent_startu
         "0012_durable_memories",
         "0013_durable_memory_identity",
         "0014_durable_memory_writes",
+        "0015_durable_write_fingerprints",
     ]
 
 

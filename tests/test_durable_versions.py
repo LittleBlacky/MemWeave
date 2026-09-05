@@ -16,6 +16,7 @@ from memweave.models import (
     MemoryStatus,
     OperationType,
 )
+from memweave.storage.schema import durable_memory_writes_table
 
 
 def make_record(
@@ -117,6 +118,17 @@ def test_create_same_record_is_idempotent(tmp_path):
     assert len(store.list_versions(MemoryScope.USER, "u1", record.key)) == 1
 
 
+def test_create_with_unregistered_write_identity_does_not_silently_bind_existing_version(
+    tmp_path,
+):
+    store = DurableMemoryStore(Database(str(tmp_path / "create-unregistered-identity.db")))
+    record = make_record()
+    store.create(record)
+
+    with pytest.raises(StaleWriteError, match="without this write identity"):
+        store.create(record, source_event_id="write-1")
+
+
 def test_create_replay_by_source_event_is_idempotent(tmp_path):
     store = DurableMemoryStore(Database(str(tmp_path / "source-replay.db")))
     record = make_record()
@@ -130,6 +142,33 @@ def test_create_replay_by_source_event_is_idempotent(tmp_path):
 
     assert store.create(replay, source_event_id="event-1") == first
     assert len(store.list_versions(MemoryScope.USER, "u1", record.key)) == 1
+
+
+def test_create_replay_rejects_changed_source_provenance(tmp_path):
+    store = DurableMemoryStore(Database(str(tmp_path / "create-source-conflict.db")))
+    record = make_record().model_copy(
+        update={
+            "source": MemorySource(
+                type="user_conversation",
+                event_ids=["evidence-1", "evidence-2"],
+                stream_id="legacy",
+            )
+        }
+    )
+    store.create(record, source_event_id="write-1")
+    changed = record.model_copy(
+        update={
+            "source": MemorySource(
+                type="extractor",
+                event_ids=["evidence-other"],
+                extractor="model-x",
+                stream_id="legacy",
+            )
+        }
+    )
+
+    with pytest.raises(StaleWriteError, match="different request parameters"):
+        store.create(changed, source_event_id="write-1")
 
 
 def test_create_allows_new_version_that_reuses_old_evidence(tmp_path):
@@ -215,6 +254,21 @@ def test_write_identity_registry_survives_reopen(tmp_path):
     assert [item.version for item in reopened.list_versions(
         MemoryScope.USER, "u1", original.key
     )] == [1]
+
+
+def test_legacy_write_identity_without_fingerprint_fails_closed(tmp_path):
+    store = DurableMemoryStore(Database(str(tmp_path / "legacy-write-identity.db")))
+    record = make_record()
+    store.create(record, source_event_id="write-1")
+    with store.database.begin() as connection:
+        connection.execute(
+            durable_memory_writes_table.update()
+            .where(durable_memory_writes_table.c.write_event_id == "write-1")
+            .values(operation_type=None, request_fingerprint=None)
+        )
+
+    with pytest.raises(StaleWriteError, match="predates request fingerprints"):
+        store.create(record, source_event_id="write-1")
 
 
 def test_durable_updates_from_different_streams_do_not_compare_seq_numbers(tmp_path):
@@ -380,6 +434,57 @@ def test_update_replay_by_source_event_is_idempotent(tmp_path):
     )] == [1, 2]
 
 
+def test_update_replay_rejects_changed_source_provenance(tmp_path):
+    store = DurableMemoryStore(Database(str(tmp_path / "update-source-conflict.db")))
+    store.create(make_record())
+    source_event_id = uuid4()
+    operation = update_operation(value="MySQL", expected_version=1)
+    store.update(operation, source_seq=2, source_event_id=source_event_id)
+    changed = operation.model_copy(
+        update={
+            "source": MemorySource(
+                type="extractor",
+                event_ids=["different-evidence"],
+                extractor="model-x",
+                stream_id="legacy",
+            )
+        }
+    )
+
+    with pytest.raises(StaleWriteError, match="different request parameters"):
+        store.update(changed, source_seq=2, source_event_id=source_event_id)
+
+
+def test_update_replay_accepts_equivalent_source_stream_representation(tmp_path):
+    store = DurableMemoryStore(Database(str(tmp_path / "update-source-normalization.db")))
+    store.create(make_record())
+    source_event_id = uuid4()
+    operation = update_operation(value="MySQL", expected_version=1, source_stream_id=None)
+    operation = operation.model_copy(
+        update={
+            "source": MemorySource(
+                type="explicit", event_ids=["operation"], stream_id=None
+            )
+        }
+    )
+    store.update(
+        operation,
+        source_seq=2,
+        source_event_id=source_event_id,
+        source_stream_id="legacy",
+    )
+    replay = operation.model_copy(
+        update={
+            "source": MemorySource(
+                type="explicit", event_ids=["operation"], stream_id="legacy"
+            )
+        }
+    )
+    assert store.update(
+        replay, source_seq=2, source_event_id=source_event_id
+    ).version == 2
+
+
 def test_update_replay_remains_idempotent_after_later_version(tmp_path):
     store = DurableMemoryStore(Database(str(tmp_path / "update-replay-history.db")))
     store.create(make_record())
@@ -506,6 +611,27 @@ def test_forget_replay_rejects_changed_expected_version(tmp_path):
         )
 
 
+def test_forget_replay_rejects_changed_source_provenance(tmp_path):
+    store = DurableMemoryStore(Database(str(tmp_path / "forget-source-metadata.db")))
+    store.create(make_record())
+    source_event_id = uuid4()
+    operation = forget_operation(expected_version=1)
+    store.forget(operation, source_seq=2, source_event_id=source_event_id)
+    changed = operation.model_copy(
+        update={
+            "source": MemorySource(
+                type="extractor",
+                event_ids=["different-evidence"],
+                extractor="model-x",
+                stream_id="legacy",
+            )
+        }
+    )
+
+    with pytest.raises(StaleWriteError, match="different request parameters"):
+        store.forget(changed, source_seq=2, source_event_id=source_event_id)
+
+
 def test_forget_by_memory_id_replay_rejects_changed_source_sequence(tmp_path):
     store = DurableMemoryStore(Database(str(tmp_path / "forget-memory-id-replay.db")))
     original = store.create(make_record())
@@ -521,7 +647,7 @@ def test_forget_by_memory_id_replay_rejects_changed_source_sequence(tmp_path):
         operation, source_seq=2, source_event_id=source_event_id
     ) == first
 
-    with pytest.raises(StaleWriteError, match="different delete"):
+    with pytest.raises(StaleWriteError, match="different request parameters"):
         store.forget(
             operation, source_seq=3, source_event_id=source_event_id
         )
@@ -549,7 +675,7 @@ def test_forget_rejects_reuse_of_source_event_from_another_version(tmp_path):
     store = DurableMemoryStore(Database(str(tmp_path / "forget-source-conflict.db")))
     store.create(make_record(), source_event_id="event-1")
 
-    with pytest.raises(StaleWriteError, match="different memory operation"):
+    with pytest.raises(StaleWriteError, match="different request parameters"):
         store.forget(
             forget_operation(expected_version=1),
             source_seq=2,

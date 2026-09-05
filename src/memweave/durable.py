@@ -4,6 +4,7 @@ import json
 import math
 from contextlib import contextmanager
 from datetime import datetime
+from hashlib import sha256
 from typing import Any, Iterator
 from uuid import NAMESPACE_URL, UUID, uuid5
 
@@ -83,6 +84,7 @@ class DurableMemoryStore:
             record = record.model_copy(
                 update={"source": source.model_copy(update=source_updates)}
             )
+        write_fingerprint = self._create_fingerprint(record)
         with self._transaction() as connection:
             source_match = None
             if source_event_id is not None:
@@ -93,6 +95,8 @@ class DurableMemoryStore:
                     record.key,
                     source_stream_id,
                     source_event_id,
+                    operation_type="create",
+                    request_fingerprint=write_fingerprint,
                 )
             if source_match is not None:
                 if self._same_record_content(source_match, record):
@@ -110,6 +114,10 @@ class DurableMemoryStore:
                     )
             else:
                 if self._same_record(latest, record):
+                    if source_event_id is not None:
+                        raise StaleWriteError(
+                            "memory version already exists without this write identity"
+                        )
                     return latest
                 if latest.id != record.id:
                     raise StaleWriteError(
@@ -138,6 +146,8 @@ class DurableMemoryStore:
                     record,
                     write_stream_id=source_stream_id,
                     write_event_id=source_event_id,
+                    operation_type="create",
+                    request_fingerprint=write_fingerprint,
                 )
             return record
 
@@ -157,6 +167,9 @@ class DurableMemoryStore:
         )
         if source_stream_id is None:
             raise ValueError("durable write requires source_stream_id")
+        write_fingerprint = self._operation_fingerprint(
+            operation, source_seq=source_seq, source_stream_id=source_stream_id
+        )
         with self._transaction() as connection:
             if source_event_id is not None:
                 source_match = self._find_write_match(
@@ -166,6 +179,8 @@ class DurableMemoryStore:
                     operation.key,
                     source_stream_id,
                     source_event_id,
+                    operation_type=OperationType.UPDATE.value,
+                    request_fingerprint=write_fingerprint,
                 )
                 if source_match is not None:
                     expected_kind = operation.kind or source_match.kind
@@ -222,6 +237,8 @@ class DurableMemoryStore:
                     record,
                     write_stream_id=source_stream_id,
                     write_event_id=source_event_id,
+                    operation_type=OperationType.UPDATE.value,
+                    request_fingerprint=write_fingerprint,
                 )
             return record
 
@@ -241,6 +258,9 @@ class DurableMemoryStore:
         )
         if source_stream_id is None:
             raise ValueError("durable write requires source_stream_id")
+        write_fingerprint = self._operation_fingerprint(
+            operation, source_seq=source_seq, source_stream_id=source_stream_id
+        )
         with self._transaction() as connection:
             if source_event_id is not None:
                 source_match = self._find_write_match(
@@ -250,6 +270,8 @@ class DurableMemoryStore:
                     operation.key,
                     source_stream_id,
                     source_event_id,
+                    operation_type=OperationType.FORGET.value,
+                    request_fingerprint=write_fingerprint,
                 )
                 if source_match is not None:
                     if (
@@ -321,6 +343,8 @@ class DurableMemoryStore:
                     tombstone,
                     write_stream_id=source_stream_id,
                     write_event_id=source_event_id,
+                    operation_type=OperationType.FORGET.value,
+                    request_fingerprint=write_fingerprint,
                 )
             return tombstone
 
@@ -476,6 +500,9 @@ class DurableMemoryStore:
         key: str | None,
         write_stream_id: str,
         write_event_id: str,
+        *,
+        operation_type: str,
+        request_fingerprint: str,
     ) -> MemoryRecord | None:
         """Find the version bound to an explicit write identity.
 
@@ -506,6 +533,17 @@ class DurableMemoryStore:
         ):
             raise StaleWriteError(
                 "write event identity is bound to a different memory"
+            )
+        if row["operation_type"] is None or row["request_fingerprint"] is None:
+            raise StaleWriteError(
+                "source event identity predates request fingerprints and cannot be replayed"
+            )
+        if (
+            row["operation_type"] != operation_type
+            or row["request_fingerprint"] != request_fingerprint
+        ):
+            raise StaleWriteError(
+                "source event already applied with different request parameters"
             )
         record_row = connection.execute(
             select(durable_memories_table).where(
@@ -554,6 +592,49 @@ class DurableMemoryStore:
         return left.model_dump(mode="json") == right.model_dump(mode="json")
 
     @staticmethod
+    def _canonical_source(source: MemorySource | None) -> dict[str, Any] | None:
+        if source is None:
+            return None
+        value = source.model_dump(mode="json")
+        value["event_ids"] = sorted(set(value["event_ids"]))
+        return value
+
+    @classmethod
+    def _create_fingerprint(cls, record: MemoryRecord) -> str:
+        payload = record.model_dump(
+            mode="json", exclude={"created_at", "updated_at"}
+        )
+        payload["source"] = cls._canonical_source(record.source)
+        return cls._request_fingerprint("create", payload)
+
+    @classmethod
+    def _operation_fingerprint(
+        cls,
+        operation: MemoryOperation,
+        *,
+        source_seq: int,
+        source_stream_id: str,
+    ) -> str:
+        payload = operation.model_dump(mode="json")
+        source = operation.source
+        if source is not None and source.stream_id != source_stream_id:
+            source = source.model_copy(update={"stream_id": source_stream_id})
+        payload["source"] = cls._canonical_source(source)
+        payload["source_seq"] = source_seq
+        payload["source_stream_id"] = source_stream_id
+        return cls._request_fingerprint(operation.operation.value, payload)
+
+    @staticmethod
+    def _request_fingerprint(operation_type: str, payload: dict[str, Any]) -> str:
+        canonical = json.dumps(
+            {"operation_type": operation_type, "payload": payload},
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+        return sha256(canonical.encode("utf-8")).hexdigest()
+
+    @staticmethod
     def _same_record_content(left: MemoryRecord, right: MemoryRecord) -> bool:
         """Compare replayable content while ignoring write timestamps/evidence order."""
         return (
@@ -600,6 +681,8 @@ class DurableMemoryStore:
         *,
         write_stream_id: str | None = None,
         write_event_id: str | None = None,
+        operation_type: str | None = None,
+        request_fingerprint: str | None = None,
     ) -> None:
         identity_by_id = connection.execute(
             select(durable_memory_identities_table).where(
@@ -651,9 +734,17 @@ class DurableMemoryStore:
                 updated_at=record.updated_at.isoformat(),
             )
         )
-        if write_stream_id is not None or write_event_id is not None:
-            if write_stream_id is None or write_event_id is None:
-                raise ValueError("write identity requires both stream and event IDs")
+        write_identity = (
+            write_stream_id,
+            write_event_id,
+            operation_type,
+            request_fingerprint,
+        )
+        if any(value is not None for value in write_identity):
+            if any(value is None for value in write_identity):
+                raise ValueError(
+                    "write identity requires stream, event, operation, and fingerprint"
+                )
             connection.execute(
                 insert(durable_memory_writes_table).values(
                     scope=record.scope.value,
@@ -662,6 +753,8 @@ class DurableMemoryStore:
                     version=record.version,
                     write_stream_id=write_stream_id,
                     write_event_id=str(write_event_id),
+                    operation_type=operation_type,
+                    request_fingerprint=request_fingerprint,
                 )
             )
 
