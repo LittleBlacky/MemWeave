@@ -133,6 +133,28 @@ def test_create_rejects_source_event_conflict_and_memory_id_change(tmp_path):
     assert store.get_active(MemoryScope.USER, "u1", original.key) == original
 
 
+def test_create_requires_contiguous_versions(tmp_path):
+    store = DurableMemoryStore(Database(str(tmp_path / "version-gaps.db")))
+
+    with pytest.raises(StaleWriteError, match="first memory version must be 1"):
+        store.create(make_record(version=2))
+
+    original = store.create(make_record())
+    with pytest.raises(StaleWriteError, match="contiguous"):
+        store.create(
+            make_record(
+                value="MySQL",
+                source_seq=2,
+                version=4,
+                memory_id=original.id,
+            )
+        )
+
+    assert [item.version for item in store.list_versions(
+        MemoryScope.USER, "u1", original.key
+    )] == [1]
+
+
 def test_update_requires_expected_version_when_supplied_and_rejects_stale_source(
     tmp_path,
 ):

@@ -51,7 +51,12 @@ class DurableMemoryStore:
             latest = self._latest_for_key(
                 connection, record.scope, record.scope_id, record.key
             )
-            if latest is not None:
+            if latest is None:
+                if record.version != 1:
+                    raise StaleWriteError(
+                        f"first memory version must be 1, got {record.version}"
+                    )
+            else:
                 if self._same_record(latest, record):
                     return latest
                 if latest.id != record.id:
@@ -59,10 +64,10 @@ class DurableMemoryStore:
                         "memory_id must remain stable across versions of a memory key"
                     )
                 self._assert_newer(record.source_seq, latest.source_seq)
-                if record.version <= latest.version:
+                if record.version != latest.version + 1:
                     raise StaleWriteError(
-                        f"memory version must increase: existing {latest.version}, "
-                        f"got {record.version}"
+                        f"memory version must be contiguous: expected "
+                        f"{latest.version + 1}, got {record.version}"
                     )
                 if not self._supersede_latest(connection, latest):
                     raise StaleWriteError(
