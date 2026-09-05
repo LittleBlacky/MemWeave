@@ -143,7 +143,7 @@ needs_confirmation
 
 ### 4.3 水位、版本和幂等
 
-每个作用域记录 `session_watermark`、`durable_watermark`、`index_watermark`。长期记忆更新使用来源事件的 `source_seq`，而不是异步任务完成时间；更大的序号才能覆盖旧版本。每个任务携带 `event_id`、`idempotency_key`、`source_seq` 和尝试次数，重复投递只允许第一次生效。版本表按版本保存多行，因此同一作用域内的 `memory_id` 绑定关系由独立身份注册表维护；`memory_id` 不能跨 key 重用，同一 key 也不能更换 `memory_id`，历史冲突必须在迁移时显式失败。长期记忆写入还单独维护 `durable_memory_writes`，用 `(write_stream_id, write_event_id)` 绑定实际写入版本，并保存操作类型和完整请求指纹；`MemorySource.event_ids` 仅表示证据集合，允许跨版本复用，不能用于写入幂等判断。指纹不完整的历史写入身份必须拒绝重放。
+每个作用域记录 `session_watermark`、`durable_watermark`、`index_watermark`。长期记忆更新使用来源事件的 `source_seq`，而不是异步任务完成时间；更大的序号才能覆盖旧版本。每个任务携带 `event_id`、`idempotency_key`、`source_seq` 和尝试次数，重复投递只允许第一次生效。版本表按版本保存多行，因此同一作用域内的 `memory_id` 绑定关系由独立身份注册表维护；`memory_id` 不能跨 key 重用，同一 key 也不能更换 `memory_id`，历史冲突必须在迁移时显式失败。长期记忆写入还单独维护 `durable_memory_writes`，用全局唯一的 `write_event_id` 和来源 `write_stream_id` 绑定实际写入版本，并保存操作类型和完整请求指纹；`MemorySource.event_ids` 仅表示证据集合，允许跨版本复用，不能用于写入幂等判断。指纹不完整的历史写入身份必须拒绝重放。
 
 事件投影的持久化 checkpoint 表示连续处理水位，而不是已见到的最大序号。启用 checkpoint 的 Dispatcher 遇到序号间隙时暂存事件，不推进水位；缺口补齐后按序投影并连续推进。未配置 checkpoint 的进程内 best-effort 分发不提供跨重启的乱序恢复保证。
 
@@ -649,3 +649,15 @@ memory_usefulness_rate
 8. 召回结果受 Top-K、Token、超时和工具调用次数限制。
 9. 每条长期记忆都能追溯到来源事件、版本和处理水位。
 10. 向量/图索引删除后可从长期权威表重建。
+
+## 27. 后续 Adapter 维护路线
+
+当前 Phase 1 只定义可替换的索引 Port，不绑定具体厂商。后续维护必须补齐以下内容：
+
+1. 稳定 `MemoryIndexAdapter` 契约，要求实现幂等键、稳定资源 ID、版本/来源序号保护、
+   tombstone、health、watermark 和重建能力。
+2. 提供本地 SQLite/内存参考实现与契约测试，确保用户编写自定义 Adapter 时有可执行基准。
+3. 以独立可选包提供 Qdrant/Pinecone/Milvus、Neo4j/NebulaGraph、Elasticsearch/OpenSearch
+   等官方第三方 Adapter，不把厂商 SDK 放入核心依赖。
+4. 每个官方 Adapter 都必须覆盖重复投递、乱序版本、删除传播、Worker 重启和索引重建；
+   不具备幂等或可对账能力的第三方 API 不得被标记为 exactly-once。

@@ -78,10 +78,12 @@ def test_local_worker_skips_already_consumed_receipt_after_redelivery(tmp_path):
     claimed = outbox.claim()
     assert claimed is not None
     assert (
-        outbox.begin_consume(claimed.id, "vector-indexer")
+        outbox.begin_consume(
+            claimed.id, "vector-indexer", claimed.lease_token
+        )
         is ConsumerClaimResult.ACQUIRED
     )
-    outbox.mark_consumed(claimed.id, "vector-indexer")
+    outbox.mark_consumed(claimed.id, "vector-indexer", claimed.lease_token)
 
     current[0] += timedelta(seconds=1)
     assert worker.run_once() == 1
@@ -100,12 +102,16 @@ def test_consumer_receipt_reports_busy_while_owned_by_another_worker(tmp_path):
     claimed = outbox.claim()
     assert claimed is not None
     assert (
-        outbox.begin_consume(claimed.id, "vector-indexer")
+        outbox.begin_consume(
+            claimed.id, "vector-indexer", claimed.lease_token
+        )
         is ConsumerClaimResult.ACQUIRED
     )
 
     assert (
-        outbox.begin_consume(claimed.id, "vector-indexer")
+        outbox.begin_consume(
+            claimed.id, "vector-indexer", claimed.lease_token
+        )
         is ConsumerClaimResult.BUSY
     )
 
@@ -135,3 +141,24 @@ def test_local_worker_releases_receipt_when_handler_fails(tmp_path):
     assert worker.run_once() == 1
     assert calls == [item.id, item.id]
     assert outbox.get(item.id).status is OutboxStatus.APPLIED
+
+
+def test_local_worker_retries_missing_handler_instead_of_leaving_processing(tmp_path):
+    current = [datetime(2026, 1, 1, tzinfo=timezone.utc)]
+    outbox = OutboxStore(
+        Database(str(tmp_path / "missing-handler.db")),
+        clock=lambda: current[0],
+    )
+    item = outbox.enqueue(uuid4(), "projection.missing", {}, "event-1")
+    worker = LocalWorker(
+        outbox,
+        {},
+        max_attempts=2,
+        base_delay_seconds=0,
+        clock=lambda: current[0],
+    )
+
+    assert worker.run_once() == 1
+    assert outbox.get(item.id).status is OutboxStatus.RETRYABLE
+    assert worker.run_once() == 1
+    assert outbox.get(item.id).status is OutboxStatus.DEAD_LETTER

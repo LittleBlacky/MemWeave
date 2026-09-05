@@ -21,6 +21,14 @@ class LocalWorker:
         consumer_id: str = "local-worker",
         clock: Callable[[], datetime] = utc_now,
     ):
+        if not isinstance(max_attempts, int) or isinstance(max_attempts, bool):
+            raise TypeError("max_attempts must be an integer")
+        if not isinstance(base_delay_seconds, (int, float)) or isinstance(base_delay_seconds, bool):
+            raise TypeError("base_delay_seconds must be numeric")
+        if not isinstance(max_delay_seconds, (int, float)) or isinstance(max_delay_seconds, bool):
+            raise TypeError("max_delay_seconds must be numeric")
+        if not isinstance(consumer_id, str):
+            raise TypeError("consumer_id must be a string")
         if max_attempts < 1:
             raise ValueError("max_attempts must be positive")
         if base_delay_seconds < 0:
@@ -43,19 +51,39 @@ class LocalWorker:
             return 0
         handler = self.handlers.get(item.topic)
         if handler is None:
-            raise KeyError(f"no handler registered for topic: {item.topic}")
-        claim_result = self.outbox.begin_consume(item.id, self.consumer_id)
+            error = f"no handler registered for topic: {item.topic}"
+            if item.attempts >= self.max_attempts:
+                self.outbox.mark_dead_letter(item.id, error, item.lease_token)
+            else:
+                delay = min(
+                    self.base_delay_seconds * (2 ** (item.attempts - 1)),
+                    self.max_delay_seconds,
+                )
+                self.outbox.mark_retryable(
+                    item.id,
+                    error,
+                    item.lease_token,
+                    available_at=self.clock() + timedelta(seconds=delay),
+                )
+            return 1
+        claim_result = self.outbox.begin_consume(
+            item.id, self.consumer_id, item.lease_token
+        )
         if claim_result is ConsumerClaimResult.ALREADY_APPLIED:
-            self.outbox.mark_applied(item.id)
+            self.outbox.mark_applied(item.id, item.lease_token)
             return 1
         if claim_result is ConsumerClaimResult.BUSY:
             return 1
         try:
             handler(item)
         except Exception as exc:
-            self.outbox.release_consume(item.id, self.consumer_id)
+            self.outbox.release_consume(item.id, self.consumer_id, item.lease_token)
             if item.attempts >= self.max_attempts:
-                self.outbox.mark_dead_letter(item.id, str(exc) or exc.__class__.__name__)
+                self.outbox.mark_dead_letter(
+                    item.id,
+                    str(exc) or exc.__class__.__name__,
+                    item.lease_token,
+                )
             else:
                 delay = min(
                     self.base_delay_seconds * (2 ** (item.attempts - 1)),
@@ -64,9 +92,10 @@ class LocalWorker:
                 self.outbox.mark_retryable(
                     item.id,
                     str(exc) or exc.__class__.__name__,
+                    item.lease_token,
                     available_at=self.clock() + timedelta(seconds=delay),
                 )
             return 1
-        self.outbox.mark_consumed(item.id, self.consumer_id)
-        self.outbox.mark_applied(item.id)
+        self.outbox.mark_consumed(item.id, self.consumer_id, item.lease_token)
+        self.outbox.mark_applied(item.id, item.lease_token)
         return 1

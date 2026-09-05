@@ -19,6 +19,7 @@ from memweave.storage.sqlalchemy import SQLAlchemyDatabase
 from memweave.storage.schema import (
     durable_memories_table,
     durable_memory_identities_table,
+    durable_memory_writes_table,
     events_table,
     projection_event_receipts_table,
     projection_watermarks_table,
@@ -63,6 +64,8 @@ def test_sqlite_database_migrations_are_versioned_and_idempotent(tmp_path):
         "0013_durable_memory_identity",
         "0014_durable_memory_writes",
         "0015_durable_write_fingerprints",
+        "0016_global_durable_write_event_ids",
+        "0017_outbox_lease_tokens",
     ]
 
 
@@ -85,6 +88,8 @@ def test_default_migration_runner_discovers_packaged_migrations():
         "0013_durable_memory_identity",
         "0014_durable_memory_writes",
         "0015_durable_write_fingerprints",
+        "0016_global_durable_write_event_ids",
+        "0017_outbox_lease_tokens",
     ]
 
 
@@ -105,6 +110,71 @@ def test_durable_write_fingerprint_migration_is_safe_on_existing_0014_schema(tmp
             for column in inspect(connection).get_columns("durable_memory_writes")
         }
     assert {"operation_type", "request_fingerprint"}.issubset(columns)
+
+
+def test_global_durable_write_event_id_migration_upgrades_existing_schema(tmp_path):
+    database = SQLAlchemyDatabase(f"sqlite+pysqlite:///{tmp_path / 'write-event-id.db'}")
+    database.apply_migrations()
+    with database.begin() as connection:
+        connection.execute(
+            delete(schema_migrations_table).where(
+                schema_migrations_table.c.version == "0016_global_durable_write_event_ids"
+            )
+        )
+        connection.exec_driver_sql("DROP INDEX uq_durable_memory_write_event_id")
+
+    assert database.apply_migrations() == ["0016_global_durable_write_event_ids"]
+    with database.read() as connection:
+        indexes = inspect(connection).get_indexes("durable_memory_writes")
+    assert any(
+        index["name"] == "uq_durable_memory_write_event_id"
+        and index["unique"]
+        and index["column_names"] == ["write_event_id"]
+        for index in indexes
+    )
+
+
+def test_global_durable_write_event_id_migration_rejects_legacy_duplicates(tmp_path):
+    database = SQLAlchemyDatabase(
+        f"sqlite+pysqlite:///{tmp_path / 'write-event-id-duplicates.db'}"
+    )
+    database.apply_migrations()
+    with database.begin() as connection:
+        connection.execute(
+            delete(schema_migrations_table).where(
+                schema_migrations_table.c.version == "0016_global_durable_write_event_ids"
+            )
+        )
+        connection.exec_driver_sql("DROP INDEX uq_durable_memory_write_event_id")
+        connection.execute(
+            durable_memory_writes_table.insert(),
+            [
+                {
+                    "scope": "user",
+                    "scope_id": "u1",
+                    "key": "language",
+                    "version": 1,
+                    "write_stream_id": "stream:a",
+                    "write_event_id": "duplicate-event",
+                    "operation_type": "create",
+                    "request_fingerprint": "a" * 64,
+                },
+                {
+                    "scope": "user",
+                    "scope_id": "u1",
+                    "key": "timezone",
+                    "version": 1,
+                    "write_stream_id": "stream:b",
+                    "write_event_id": "duplicate-event",
+                    "operation_type": "create",
+                    "request_fingerprint": "b" * 64,
+                },
+            ],
+        )
+
+    with pytest.raises(ValueError, match="global durable write event identity"):
+        database.apply_migrations()
+    assert "0016_global_durable_write_event_ids" not in database.applied_migrations()
 
 
 def test_migration_runner_applied_returns_empty_only_when_table_is_missing(tmp_path):
@@ -154,6 +224,8 @@ def test_generic_sqlalchemy_database_can_apply_core_migration(tmp_path):
         "0013_durable_memory_identity",
         "0014_durable_memory_writes",
         "0015_durable_write_fingerprints",
+        "0016_global_durable_write_event_ids",
+        "0017_outbox_lease_tokens",
     ]
     assert database.applied_migrations() == [
         "0001_core",
@@ -171,6 +243,8 @@ def test_generic_sqlalchemy_database_can_apply_core_migration(tmp_path):
         "0013_durable_memory_identity",
         "0014_durable_memory_writes",
         "0015_durable_write_fingerprints",
+        "0016_global_durable_write_event_ids",
+        "0017_outbox_lease_tokens",
     ]
 
 
@@ -216,6 +290,8 @@ def test_stream_identity_migration_upgrades_legacy_session_tables(tmp_path):
         "0013_durable_memory_identity",
         "0014_durable_memory_writes",
         "0015_durable_write_fingerprints",
+        "0016_global_durable_write_event_ids",
+        "0017_outbox_lease_tokens",
     ]
     with database.read() as connection:
         assert "stream_id" in {
@@ -353,6 +429,8 @@ def test_durable_identity_migration_backfills_versions_and_rejects_conflicts(tmp
         "0012_durable_memories",
         "0014_durable_memory_writes",
         "0015_durable_write_fingerprints",
+        "0016_global_durable_write_event_ids",
+        "0017_outbox_lease_tokens",
     ]
 
     key_conflict_database = SQLAlchemyDatabase(
@@ -532,7 +610,7 @@ def test_stream_recovery_migration_resets_only_ambiguous_sessions(tmp_path):
             "('tenant:t/session:plain')"
         )
 
-    assert database.apply_migrations() == ["0007_session_stream_recovery", "0008_session_event_receipts", "0009_projection_event_receipts", "0010_validate_projection_receipts", "0011_validate_session_receipts", "0012_durable_memories", "0013_durable_memory_identity", "0014_durable_memory_writes", "0015_durable_write_fingerprints"]
+    assert database.apply_migrations() == ["0007_session_stream_recovery", "0008_session_event_receipts", "0009_projection_event_receipts", "0010_validate_projection_receipts", "0011_validate_session_receipts", "0012_durable_memories", "0013_durable_memory_identity", "0014_durable_memory_writes", "0015_durable_write_fingerprints", "0016_global_durable_write_event_ids", "0017_outbox_lease_tokens"]
     with database.read() as connection:
         assert connection.execute(
             text("SELECT COUNT(*) FROM session_states WHERE session_id = 'stream:legacy'")
@@ -571,7 +649,7 @@ def test_generic_sqlalchemy_database_migrations_are_safe_under_concurrent_startu
     with ThreadPoolExecutor(max_workers=8) as executor:
         results = list(executor.map(apply_migrations, range(8)))
 
-    assert sum(result == ["0001_core", "0002_outbox", "0003_outbox_consumer_receipts", "0004_session_states", "0005_session_command_leases", "0006_session_stream_identity", "0007_session_stream_recovery", "0008_session_event_receipts", "0009_projection_event_receipts", "0010_validate_projection_receipts", "0011_validate_session_receipts", "0012_durable_memories", "0013_durable_memory_identity", "0014_durable_memory_writes", "0015_durable_write_fingerprints"] for result in results) == 1
+    assert sum(result == ["0001_core", "0002_outbox", "0003_outbox_consumer_receipts", "0004_session_states", "0005_session_command_leases", "0006_session_stream_identity", "0007_session_stream_recovery", "0008_session_event_receipts", "0009_projection_event_receipts", "0010_validate_projection_receipts", "0011_validate_session_receipts", "0012_durable_memories", "0013_durable_memory_identity", "0014_durable_memory_writes", "0015_durable_write_fingerprints", "0016_global_durable_write_event_ids", "0017_outbox_lease_tokens"] for result in results) == 1
     assert sum(result == [] for result in results) == 7
     assert database.apply_migrations() == []
     assert database.applied_migrations() == [
@@ -590,6 +668,8 @@ def test_generic_sqlalchemy_database_migrations_are_safe_under_concurrent_startu
         "0013_durable_memory_identity",
         "0014_durable_memory_writes",
         "0015_durable_write_fingerprints",
+        "0016_global_durable_write_event_ids",
+        "0017_outbox_lease_tokens",
     ]
 
 

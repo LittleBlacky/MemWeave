@@ -287,6 +287,14 @@ def test_durable_updates_from_different_streams_do_not_compare_seq_numbers(tmp_p
     assert updated.id == original.id
 
 
+def test_durable_writes_reject_blank_source_stream_in_memory_source(tmp_path):
+    store = DurableMemoryStore(Database(str(tmp_path / "blank-source-stream.db")))
+    with pytest.raises(ValueError, match="source_stream_id must be a non-empty string"):
+        store.create(
+            make_record(source_stream_id="   ")
+        )
+
+
 def test_source_event_replay_requires_the_same_stream_identity(tmp_path):
     store = DurableMemoryStore(Database(str(tmp_path / "source-stream-replay.db")))
     store.create(make_record(source_stream_id="session:a"))
@@ -589,8 +597,28 @@ def test_forget_creates_tombstone_and_is_idempotent(tmp_path):
     assert [item.version for item in history] == [1, 2]
     assert history[0].id == original.id
 
-    with pytest.raises(StaleWriteError, match="different source_seq"):
+    with pytest.raises(StaleWriteError, match="different source metadata"):
         store.forget(forget, source_seq=3)
+
+
+def test_forget_without_write_identity_rejects_changed_source_provenance(tmp_path):
+    store = DurableMemoryStore(Database(str(tmp_path / "forget-source-no-id.db")))
+    store.create(make_record())
+    operation = forget_operation(expected_version=1)
+    store.forget(operation, source_seq=2)
+    changed = operation.model_copy(
+        update={
+            "source": MemorySource(
+                type="extractor",
+                event_ids=["different-evidence"],
+                extractor="model-x",
+                stream_id="legacy",
+            )
+        }
+    )
+
+    with pytest.raises(StaleWriteError, match="different source metadata"):
+        store.forget(changed, source_seq=2)
 
 
 def test_forget_replay_rejects_changed_expected_version(tmp_path):

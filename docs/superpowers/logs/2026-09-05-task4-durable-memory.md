@@ -51,7 +51,8 @@
   都会失败；写入路径也在插入前显式拒绝，避免只依赖数据库唯一约束异常。
 - `source_event_id` 与 `MemorySource.event_ids` 分开持久化：前者是本次写入的幂等身份，
   后者是可跨版本复用的证据集合。新增 `durable_memory_writes` 注册表，以
-  `(write_stream_id, write_event_id)` 绑定具体的 `(scope, scope_id, key, version)`；
+  全局唯一的 `write_event_id` 和来源 `write_stream_id` 绑定具体的
+  `(scope, scope_id, key, version)`；
   该绑定与版本记录在同一事务中提交。新版本引用旧证据时不会再被误判为重复写入，
   历史来源证据也不会被反向当作写入身份。历史记录不回填该注册表，因为无法安全
   判断旧证据中的哪一个事件真正执行了写入。
@@ -67,14 +68,26 @@
   `expected_version`/CAS 和上层 Resolver 处理。source event 重放同时校验 stream
   identity、序号和目标版本。
 
+## 2026-09-05：写入事件身份的全局唯一性
+
+- 发现代码和设计约定会拒绝同一 `write_event_id` 在不同 stream 重放，但数据库原先
+  只约束 `(write_stream_id, write_event_id)`。并发请求可能同时查不到对方，再分别插入
+  同一个事件 ID，破坏写入幂等语义。
+- 新 schema 增加 `uq_durable_memory_write_event_id` 唯一索引；新增迁移
+  `0016_global_durable_write_event_ids` 为已有数据库补索引。
+- 迁移创建索引前会检测历史跨 stream 重复并明确失败，不会悄悄选择某一条记录；重复数据
+  需要先人工清理后才能启用全局唯一性。
+- 应用层的跨 stream 检查仍保留，用于在旧 schema 或数据库约束错误时返回可读的
+  `StaleWriteError`。
+
 ## 验证
 
 ```text
 G:\\Anaconda\\envs\\smallshrimp\\python.exe -m pytest tests/test_durable_versions.py -q
-36 passed
+38 passed
 
 G:\\Anaconda\\envs\\smallshrimp\\python.exe -m pytest -q
-201 passed
+205 passed
 
 G:\\Anaconda\\envs\\smallshrimp\\python.exe -m compileall -q src
 git diff --check

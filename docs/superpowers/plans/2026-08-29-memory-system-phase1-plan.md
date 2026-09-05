@@ -184,11 +184,11 @@ docs/superpowers/logs/
 - `claim(topic=None)`, `mark_applied`, `mark_retryable`, `mark_dead_letter`, `get`; lease duration is configured on `OutboxStore`.
 - `LocalWorker.run_once() -> int`.
 
-- [ ] **Step 1: Write failing tests** for retry, lease expiry, duplicate delivery, five-attempt dead-letter, and replay after restart.
-- [ ] **Step 2: Run the outbox tests** and verify failure.
-- [ ] **Step 3: Implement state transitions** `pending → processing → applied|retryable|dead_letter`, durable lease expiry, and Worker exponential backoff capped at five minutes; handler idempotency checks use durable consumer receipts.
-- [ ] **Step 4: Run the outbox suite** and verify deterministic retries using an injected clock.
-- [ ] **Step 5: Commit** with `feat: add retryable outbox worker`.
+- [x] **Step 1: Write failing tests** for retry, lease expiry, duplicate delivery, five-attempt dead-letter, and replay after restart.
+- [x] **Step 2: Run the outbox tests** and verify failure.
+- [x] **Step 3: Implement state transitions** `pending → processing → applied|retryable|dead_letter`, durable lease expiry, and Worker exponential backoff capped at five minutes; handler idempotency checks use durable consumer receipts.
+- [x] **Step 4: Run the outbox suite** and verify deterministic retries using an injected clock.
+- [x] **Step 5: Commit** with `feat: add retryable outbox worker`.
 
 ## Task 6: Recall Service with Budget and Consistency Controls
 
@@ -271,5 +271,15 @@ docs/superpowers/logs/
 Spec coverage: Tasks 1–2 cover protocol metadata and event sourcing; Tasks 3–6 cover session, durable state, lifecycle, outbox, recall, scope, and budgets; Task 7 covers the required L1 adapter contract plus replaceable natural-language extraction and policy gates; Task 8 covers L3 adapter contracts and HTTP/tool governance; Task 9 covers phase-one acceptance and documentation. Hosted LLM providers, vector/graph indexes, L2 proxy, experience synthesis, and automatic policy evolution remain deferred.
 
 Placeholder scan: No TODO/TBD or unspecified test steps are used. Every public type and method referenced by a later task is defined in an earlier task.
+
+## 后续维护 Backlog（不属于当前 Phase 1）
+
+- [ ] 稳定 `MemoryIndexAdapter` 统一契约，明确 `idempotency_key`、资源 ID、版本保护、
+  tombstone、health 和 watermark 语义。
+- [ ] 提供本地 SQLite/内存参考 Adapter 及可复用契约测试，作为用户自定义实现的基准。
+- [ ] 提供官方第三方厂商 Adapter：Qdrant/Pinecone/Milvus 向量库、Neo4j/NebulaGraph
+  图数据库、Elasticsearch/OpenSearch 关键词索引。
+- [ ] 为每个官方 Adapter 增加真实服务集成测试、重试/乱序/删除传播测试和索引重建测试；
+  厂商 SDK 作为可选依赖，不进入 `memweave-core` 核心包。
 
 Type consistency: Adapters depend only on `AgentAdapter`, `MemoryKernel`, and protocol models; HTTP and tools never access SQLite tables directly. Identity is always supplied by `AuthContext` from the service boundary.

@@ -305,13 +305,20 @@ class DurableMemoryStore:
                         f"expected memory version {operation.expected_version}, "
                         f"got {latest.version - 1} for the deleted version"
                     )
+                expected_source = self._tombstone_record(
+                    latest,
+                    source_seq=source_seq,
+                    source=operation.source,
+                    source_stream_id=source_stream_id,
+                ).source
                 if (
                     source_seq == latest.source_seq
-                    and source_stream_id == latest.source.stream_id
+                    and self._canonical_source(expected_source)
+                    == self._canonical_source(latest.source)
                 ):
                     return latest
                 raise StaleWriteError(
-                    "memory delete was already applied with different source_seq"
+                    "memory delete was already applied with different source metadata"
                 )
             if (
                 operation.expected_version is not None
@@ -459,13 +466,16 @@ class DurableMemoryStore:
         source_stream_id = cls._validate_source_stream_id(source_stream_id)
         if source is None:
             return source_stream_id
+        source_stream_id_from_source = cls._validate_source_stream_id(
+            source.stream_id
+        )
         if (
             source_stream_id is not None
-            and source.stream_id is not None
-            and source_stream_id != source.stream_id
+            and source_stream_id_from_source is not None
+            and source_stream_id != source_stream_id_from_source
         ):
             raise ValueError("source_stream_id conflicts with operation source")
-        return source_stream_id or source.stream_id
+        return source_stream_id or source_stream_id_from_source
 
     @staticmethod
     def _assert_newer(

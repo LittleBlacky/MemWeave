@@ -1,6 +1,16 @@
 """SQLAlchemy Core table metadata for the relational authority."""
 
-from sqlalchemy import Column, Float, Integer, MetaData, String, Table, Text, UniqueConstraint
+from sqlalchemy import (
+    Column,
+    Float,
+    Index,
+    Integer,
+    MetaData,
+    String,
+    Table,
+    Text,
+    UniqueConstraint,
+)
 
 
 metadata = MetaData()
@@ -163,6 +173,14 @@ durable_memory_writes_table = Table(
     ),
 )
 
+# ``write_event_id`` is the externally visible event identity.  The stream is
+# retained for provenance, but cannot widen the idempotency domain.
+durable_memory_write_event_id_index = Index(
+    "uq_durable_memory_write_event_id",
+    durable_memory_writes_table.c.write_event_id,
+    unique=True,
+)
+
 schema_migrations_table = Table(
     "schema_migrations",
     metadata,
@@ -182,6 +200,7 @@ outbox_table = Table(
     Column("attempts", Integer, nullable=False),
     Column("available_at", String(64), nullable=False),
     Column("locked_at", String(64)),
+    Column("lease_token", String(36)),
     Column("last_error", Text),
     Column("created_at", String(64), nullable=False),
     Column("updated_at", String(64), nullable=False),
@@ -196,6 +215,7 @@ outbox_consumer_receipts_table = Table(
     Column("idempotency_key", String(512), nullable=False),
     Column("status", String(32), nullable=False),
     Column("locked_at", String(64)),
+    Column("lease_token", String(36)),
     Column("consumed_at", String(64)),
     Column("created_at", String(64), nullable=False),
     Column("updated_at", String(64), nullable=False),
