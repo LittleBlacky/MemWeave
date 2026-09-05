@@ -101,7 +101,7 @@ def test_create_same_record_is_idempotent(tmp_path):
 def test_create_replay_by_source_event_is_idempotent(tmp_path):
     store = DurableMemoryStore(Database(str(tmp_path / "source-replay.db")))
     record = make_record()
-    first = store.create(record)
+    first = store.create(record, source_event_id="event-1")
     replay = record.model_copy(
         update={
             "created_at": datetime(2026, 1, 2, tzinfo=timezone.utc),
@@ -109,8 +109,30 @@ def test_create_replay_by_source_event_is_idempotent(tmp_path):
         }
     )
 
-    assert store.create(replay) == first
+    assert store.create(replay, source_event_id="event-1") == first
     assert len(store.list_versions(MemoryScope.USER, "u1", record.key)) == 1
+
+
+def test_create_allows_new_version_that_reuses_old_evidence(tmp_path):
+    store = DurableMemoryStore(Database(str(tmp_path / "source-evidence.db")))
+    original = store.create(make_record(), source_event_id="event-1")
+    updated = make_record(
+        value="MySQL",
+        source_seq=2,
+        version=2,
+        memory_id=original.id,
+    ).model_copy(
+        update={
+            "source": MemorySource(
+                type="extractor", event_ids=["event-1", "event-2"]
+            )
+        }
+    )
+
+    assert store.create(updated, source_event_id="event-2") == updated
+    assert [item.version for item in store.list_versions(
+        MemoryScope.USER, "u1", original.key
+    )] == [1, 2]
 
 
 def test_create_rejects_source_event_conflict_and_memory_id_change(tmp_path):
@@ -123,7 +145,7 @@ def test_create_rejects_source_event_conflict_and_memory_id_change(tmp_path):
         update={"source": MemorySource(type="explicit", event_ids=["event-1"])}
     )
     with pytest.raises(StaleWriteError, match="source event"):
-        store.create(conflicting_source)
+        store.create(conflicting_source, source_event_id="event-1")
 
     replacement = make_record(
         value="MySQL", source_seq=2, version=2, memory_id=uuid4()

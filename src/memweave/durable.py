@@ -57,12 +57,34 @@ class DurableMemoryStore:
     def __init__(self, database: RelationalDatabase):
         self.database = database
 
-    def create(self, record: MemoryRecord) -> MemoryRecord:
+    def create(
+        self,
+        record: MemoryRecord,
+        *,
+        source_event_id: UUID | str | None = None,
+    ) -> MemoryRecord:
         self._validate_record(record)
-        with self._transaction() as connection:
-            source_match = self._find_source_match(
-                connection, record.scope, record.scope_id, record.key, record.source.event_ids
+        source_event_id = self._validate_source_event_id(source_event_id)
+        if source_event_id is not None and source_event_id not in record.source.event_ids:
+            record = record.model_copy(
+                update={
+                    "source": MemorySource(
+                        type=record.source.type,
+                        event_ids=[*record.source.event_ids, source_event_id],
+                        extractor=record.source.extractor,
+                    )
+                }
             )
+        with self._transaction() as connection:
+            source_match = None
+            if source_event_id is not None:
+                source_match = self._find_source_match(
+                    connection,
+                    record.scope,
+                    record.scope_id,
+                    record.key,
+                    [source_event_id],
+                )
             if source_match is not None:
                 if self._same_record_content(source_match, record):
                     return source_match
@@ -316,6 +338,16 @@ class DurableMemoryStore:
         if source_seq < 1:
             raise ValueError("source_seq must be positive")
         return source_seq
+
+    @staticmethod
+    def _validate_source_event_id(source_event_id: UUID | str | None) -> str | None:
+        if source_event_id is None:
+            return None
+        if isinstance(source_event_id, UUID):
+            return str(source_event_id)
+        if not isinstance(source_event_id, str) or not source_event_id.strip():
+            raise ValueError("source_event_id must be a non-empty string or UUID")
+        return source_event_id
 
     @staticmethod
     def _assert_newer(source_seq: int, current: int) -> None:
