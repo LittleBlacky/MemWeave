@@ -818,6 +818,7 @@ class SessionStore:
                 type=source.type,
                 event_ids=[*source.event_ids, source_event_id_value],
                 extractor=source.extractor,
+                stream_id=source.stream_id,
             )
         record_id = (
             existing.id

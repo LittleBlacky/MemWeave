@@ -26,6 +26,7 @@ def make_record(
     key="database.engine",
     memory_id=None,
     status=MemoryStatus.ACTIVE,
+    source_stream_id="legacy",
 ):
     return MemoryRecord(
         id=memory_id or uuid4(),
@@ -36,7 +37,11 @@ def make_record(
         value=value,
         status=status,
         confidence=1.0,
-        source=MemorySource(type="explicit", event_ids=[f"event-{source_seq}"]),
+        source=MemorySource(
+            type="explicit",
+            event_ids=[f"event-{source_seq}"],
+            stream_id=source_stream_id,
+        ),
         source_seq=source_seq,
         version=version,
         created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
@@ -44,7 +49,9 @@ def make_record(
     )
 
 
-def update_operation(*, value, expected_version=1, key="database.engine"):
+def update_operation(
+    *, value, expected_version=1, key="database.engine", source_stream_id="legacy"
+):
     return MemoryOperation(
         operation=OperationType.UPDATE,
         scope=MemoryScope.USER,
@@ -52,10 +59,19 @@ def update_operation(*, value, expected_version=1, key="database.engine"):
         key=key,
         value=value,
         expected_version=expected_version,
+        source=MemorySource(
+            type="explicit", event_ids=["operation"], stream_id=source_stream_id
+        ),
     )
 
 
-def forget_operation(*, key="database.engine", memory_id=None, expected_version=None):
+def forget_operation(
+    *,
+    key="database.engine",
+    memory_id=None,
+    expected_version=None,
+    source_stream_id="legacy",
+):
     return MemoryOperation(
         operation=OperationType.FORGET,
         scope=MemoryScope.USER,
@@ -63,6 +79,9 @@ def forget_operation(*, key="database.engine", memory_id=None, expected_version=
         key=key,
         memory_id=memory_id,
         expected_version=expected_version,
+        source=MemorySource(
+            type="explicit", event_ids=["operation"], stream_id=source_stream_id
+        ),
     )
 
 
@@ -124,7 +143,7 @@ def test_create_allows_new_version_that_reuses_old_evidence(tmp_path):
     ).model_copy(
         update={
             "source": MemorySource(
-                type="extractor", event_ids=["event-1", "event-2"]
+                type="extractor", event_ids=["event-1", "event-2"], stream_id="legacy"
             )
         }
     )
@@ -135,6 +154,50 @@ def test_create_allows_new_version_that_reuses_old_evidence(tmp_path):
     )] == [1, 2]
 
 
+def test_durable_updates_from_different_streams_do_not_compare_seq_numbers(tmp_path):
+    store = DurableMemoryStore(Database(str(tmp_path / "source-streams.db")))
+    original = store.create(
+        make_record(source_seq=20, source_stream_id="session:a")
+    )
+
+    updated = store.update(
+        update_operation(value="SQLite", source_stream_id="session:b"),
+        source_seq=1,
+    )
+
+    assert updated.version == 2
+    assert updated.source.stream_id == "session:b"
+    assert updated.id == original.id
+
+
+def test_source_event_replay_requires_the_same_stream_identity(tmp_path):
+    store = DurableMemoryStore(Database(str(tmp_path / "source-stream-replay.db")))
+    store.create(make_record(source_stream_id="session:a"))
+    source_event_id = uuid4()
+    operation = update_operation(value="SQLite", source_stream_id="session:a")
+    store.update(
+        operation,
+        source_seq=2,
+        source_event_id=source_event_id,
+        source_stream_id="session:a",
+    )
+
+    changed_operation = operation.model_copy(
+        update={
+            "source": MemorySource(
+                type="explicit", event_ids=["operation"], stream_id="session:b"
+            )
+        }
+    )
+    with pytest.raises(StaleWriteError, match="source event"):
+        store.update(
+            changed_operation,
+            source_seq=2,
+            source_event_id=source_event_id,
+            source_stream_id="session:b",
+        )
+
+
 def test_create_rejects_source_event_conflict_and_memory_id_change(tmp_path):
     store = DurableMemoryStore(Database(str(tmp_path / "create-conflict.db")))
     original = store.create(make_record())
@@ -142,7 +205,11 @@ def test_create_rejects_source_event_conflict_and_memory_id_change(tmp_path):
     conflicting_source = make_record(
         value="MySQL", source_seq=2, version=2, memory_id=original.id
     ).model_copy(
-        update={"source": MemorySource(type="explicit", event_ids=["event-1"])}
+        update={
+            "source": MemorySource(
+                type="explicit", event_ids=["event-1"], stream_id="legacy"
+            )
+        }
     )
     with pytest.raises(StaleWriteError, match="source event"):
         store.create(conflicting_source, source_event_id="event-1")

@@ -62,18 +62,24 @@ class DurableMemoryStore:
         record: MemoryRecord,
         *,
         source_event_id: UUID | str | None = None,
+        source_stream_id: str | None = None,
     ) -> MemoryRecord:
         self._validate_record(record)
         source_event_id = self._validate_source_event_id(source_event_id)
-        if source_event_id is not None and source_event_id not in record.source.event_ids:
+        source_stream_id = self._resolve_source_stream_id(
+            record.source, source_stream_id
+        )
+        if source_stream_id is None:
+            raise ValueError("durable write requires source_stream_id")
+        source = record.source
+        source_updates = {}
+        if source_stream_id != source.stream_id:
+            source_updates["stream_id"] = source_stream_id
+        if source_event_id is not None and source_event_id not in source.event_ids:
+            source_updates["event_ids"] = [*source.event_ids, source_event_id]
+        if source_updates:
             record = record.model_copy(
-                update={
-                    "source": MemorySource(
-                        type=record.source.type,
-                        event_ids=[*record.source.event_ids, source_event_id],
-                        extractor=record.source.extractor,
-                    )
-                }
+                update={"source": source.model_copy(update=source_updates)}
             )
         with self._transaction() as connection:
             source_match = None
@@ -106,7 +112,12 @@ class DurableMemoryStore:
                     raise StaleWriteError(
                         "memory_id must remain stable across versions of a memory key"
                     )
-                self._assert_newer(record.source_seq, latest.source_seq)
+                self._assert_newer(
+                    record.source_seq,
+                    latest.source_seq,
+                    source_stream_id=record.source.stream_id,
+                    current_stream_id=latest.source.stream_id,
+                )
                 if record.version != latest.version + 1:
                     raise StaleWriteError(
                         f"memory version must be contiguous: expected "
@@ -125,9 +136,16 @@ class DurableMemoryStore:
         *,
         source_seq: int | None = None,
         source_event_id: UUID | str | None = None,
+        source_stream_id: str | None = None,
     ) -> MemoryRecord:
         self._validate_operation(operation, OperationType.UPDATE)
         source_seq = self._validate_source_seq(source_seq)
+        source_event_id = self._validate_source_event_id(source_event_id)
+        source_stream_id = self._resolve_source_stream_id(
+            operation.source, source_stream_id
+        )
+        if source_stream_id is None:
+            raise ValueError("durable write requires source_stream_id")
         with self._transaction() as connection:
             if source_event_id is not None:
                 source_match = self._find_source_match(
@@ -143,6 +161,7 @@ class DurableMemoryStore:
                         source_match.version > 1
                         and operation.expected_version == source_match.version - 1
                         and source_seq == source_match.source_seq
+                        and source_stream_id == source_match.source.stream_id
                         and source_match.status is MemoryStatus.ACTIVE
                         and source_match.value == operation.value
                         and source_match.kind is expected_kind
@@ -166,12 +185,18 @@ class DurableMemoryStore:
                     f"expected memory version {operation.expected_version}, "
                     f"got {latest.version}"
                 )
-            self._assert_newer(source_seq, latest.source_seq)
+            self._assert_newer(
+                source_seq,
+                latest.source_seq,
+                source_stream_id=source_stream_id,
+                current_stream_id=latest.source.stream_id,
+            )
             record = self._updated_record(
                 latest,
                 operation,
                 source_seq=source_seq,
                 source_event_id=source_event_id,
+                source_stream_id=source_stream_id,
             )
             if not self._supersede_latest(connection, latest):
                 raise StaleWriteError(
@@ -186,9 +211,16 @@ class DurableMemoryStore:
         *,
         source_seq: int | None = None,
         source_event_id: UUID | str | None = None,
+        source_stream_id: str | None = None,
     ) -> MemoryRecord | None:
         self._validate_operation(operation, OperationType.FORGET)
         source_seq = self._validate_source_seq(source_seq)
+        source_event_id = self._validate_source_event_id(source_event_id)
+        source_stream_id = self._resolve_source_stream_id(
+            operation.source, source_stream_id
+        )
+        if source_stream_id is None:
+            raise ValueError("durable write requires source_stream_id")
         with self._transaction() as connection:
             if source_event_id is not None:
                 source_key = operation.key
@@ -211,6 +243,7 @@ class DurableMemoryStore:
                         if (
                             operation.expected_version == source_match.version - 1
                             and source_seq == source_match.source_seq
+                            and source_stream_id == source_match.source.stream_id
                         ):
                             return source_match
                         raise StaleWriteError(
@@ -228,7 +261,10 @@ class DurableMemoryStore:
                         f"expected memory version {operation.expected_version}, "
                         f"got {latest.version - 1} for the deleted version"
                     )
-                if source_seq == latest.source_seq:
+                if (
+                    source_seq == latest.source_seq
+                    and source_stream_id == latest.source.stream_id
+                ):
                     return latest
                 raise StaleWriteError(
                     "memory delete was already applied with different source_seq"
@@ -241,12 +277,18 @@ class DurableMemoryStore:
                     f"expected memory version {operation.expected_version}, "
                     f"got {latest.version}"
                 )
-            self._assert_newer(source_seq, latest.source_seq)
+            self._assert_newer(
+                source_seq,
+                latest.source_seq,
+                source_stream_id=source_stream_id,
+                current_stream_id=latest.source.stream_id,
+            )
             tombstone = self._tombstone_record(
                 latest,
                 source_seq=source_seq,
                 source_event_id=source_event_id,
                 source=operation.source,
+                source_stream_id=source_stream_id,
             )
             if not self._supersede_latest(connection, latest):
                 raise StaleWriteError(
@@ -350,8 +392,37 @@ class DurableMemoryStore:
         return source_event_id
 
     @staticmethod
-    def _assert_newer(source_seq: int, current: int) -> None:
-        if source_seq <= current:
+    def _validate_source_stream_id(source_stream_id: str | None) -> str | None:
+        if source_stream_id is None:
+            return None
+        if not isinstance(source_stream_id, str) or not source_stream_id.strip():
+            raise ValueError("source_stream_id must be a non-empty string")
+        return source_stream_id
+
+    @classmethod
+    def _resolve_source_stream_id(
+        cls, source: MemorySource | None, source_stream_id: str | None
+    ) -> str | None:
+        source_stream_id = cls._validate_source_stream_id(source_stream_id)
+        if source is None:
+            return source_stream_id
+        if (
+            source_stream_id is not None
+            and source.stream_id is not None
+            and source_stream_id != source.stream_id
+        ):
+            raise ValueError("source_stream_id conflicts with operation source")
+        return source_stream_id or source.stream_id
+
+    @staticmethod
+    def _assert_newer(
+        source_seq: int,
+        current: int,
+        *,
+        source_stream_id: str | None,
+        current_stream_id: str | None,
+    ) -> None:
+        if source_stream_id == current_stream_id and source_seq <= current:
             raise StaleWriteError(
                 f"memory source_seq must increase: existing {current}, got {source_seq}"
             )
@@ -454,6 +525,7 @@ class DurableMemoryStore:
             and left.value == right.value
             and left.status is right.status
             and left.confidence == right.confidence
+            and left.source.stream_id == right.source.stream_id
             and left.source_seq == right.source_seq
             and left.version == right.version
         )
@@ -535,9 +607,13 @@ class DurableMemoryStore:
         *,
         source_seq: int,
         source_event_id: UUID | str | None,
+        source_stream_id: str | None,
     ) -> MemoryRecord:
         source = DurableMemoryStore._operation_source(
-            operation, source_seq=source_seq, source_event_id=source_event_id
+            operation,
+            source_seq=source_seq,
+            source_event_id=source_event_id,
+            source_stream_id=source_stream_id,
         )
         return MemoryRecord(
             id=latest.id,
@@ -562,6 +638,7 @@ class DurableMemoryStore:
         source_seq: int,
         source_event_id: UUID | str | None,
         source: MemorySource | None,
+        source_stream_id: str | None,
     ) -> MemoryRecord:
         resolved_source = source or MemorySource(
             type="explicit",
@@ -574,12 +651,21 @@ class DurableMemoryStore:
                     )
                 )
             ],
+            stream_id=source_stream_id,
         )
+        if (
+            source_stream_id is not None
+            and resolved_source.stream_id != source_stream_id
+        ):
+            resolved_source = resolved_source.model_copy(
+                update={"stream_id": source_stream_id}
+            )
         if source_event_id is not None and str(source_event_id) not in resolved_source.event_ids:
             resolved_source = MemorySource(
                 type=resolved_source.type,
                 event_ids=[*resolved_source.event_ids, str(source_event_id)],
                 extractor=resolved_source.extractor,
+                stream_id=resolved_source.stream_id,
             )
         return MemoryRecord(
             id=latest.id,
@@ -599,7 +685,11 @@ class DurableMemoryStore:
 
     @staticmethod
     def _operation_source(
-        operation: MemoryOperation, *, source_seq: int, source_event_id: UUID | str | None
+        operation: MemoryOperation,
+        *,
+        source_seq: int,
+        source_event_id: UUID | str | None,
+        source_stream_id: str | None,
     ) -> MemorySource:
         source = operation.source or MemorySource(
             type="explicit",
@@ -613,12 +703,19 @@ class DurableMemoryStore:
                     )
                 )
             ],
+            stream_id=source_stream_id,
         )
+        if (
+            source_stream_id is not None
+            and source.stream_id != source_stream_id
+        ):
+            source = source.model_copy(update={"stream_id": source_stream_id})
         if source_event_id is not None and str(source_event_id) not in source.event_ids:
             source = MemorySource(
                 type=source.type,
                 event_ids=[*source.event_ids, str(source_event_id)],
                 extractor=source.extractor,
+                stream_id=source.stream_id,
             )
         return source
 

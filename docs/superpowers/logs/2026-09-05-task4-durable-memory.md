@@ -52,15 +52,19 @@
 - `create()` 现在把 `source_event_id` 与 `MemorySource.event_ids` 分开处理：前者是
   本次写入的幂等身份，后者是可跨版本复用的证据集合。新版本引用旧证据时不会再被
   误判为重复写入；传入的写入事件 ID 会被补入持久化来源，保证审计可追溯。
+- `MemorySource` 增加可选 `stream_id` 保存来源位置。长期版本只在同一 stream 内
+  比较 `source_seq`；跨 stream 不再用无意义的整数大小判断新旧，而由
+  `expected_version`/CAS 和上层 Resolver 处理。source event 重放同时校验 stream
+  identity、序号和目标版本。
 
 ## 验证
 
 ```text
 G:\\Anaconda\\envs\\smallshrimp\\python.exe -m pytest tests/test_durable_versions.py -q
-10 passed
+22 passed
 
 G:\\Anaconda\\envs\\smallshrimp\\python.exe -m pytest -q
-171 passed
+188 passed
 
 G:\\Anaconda\\envs\\smallshrimp\\python.exe -m compileall -q src
 git diff --check

@@ -69,6 +69,7 @@ class MemorySource(BaseModel):
     type: str = Field(min_length=1)
     event_ids: List[str] = Field(min_length=1)
     extractor: Optional[str] = None
+    stream_id: Optional[str] = Field(default=None, min_length=1)
 
 
 class AuthContext(BaseModel):
