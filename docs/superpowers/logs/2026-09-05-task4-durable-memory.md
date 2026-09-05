@@ -21,6 +21,9 @@
 - `DurableMemoryStore.create()` 现在只接受 `active` 初始记录；candidate、
   needs_confirmation 以及其它生命周期状态不会遮蔽已有 active 记忆，候选晋升留给
   Task 7 的策略流程。
+- 并发更新和删除改用带 `version`、`key`、`active` 状态条件的 CAS 更新；条件更新
+  影响行数为零时返回 `StaleWriteError`，不插入新版本。唯一版本约束产生的
+  `IntegrityError` 也统一转换为 `StaleWriteError`，调用方不再依赖底层数据库异常类型。
 
 ## 验证
 

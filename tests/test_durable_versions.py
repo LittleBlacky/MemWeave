@@ -2,6 +2,7 @@ from datetime import datetime, timezone
 from uuid import uuid4
 
 import pytest
+from sqlalchemy.exc import IntegrityError
 
 from memweave.db import Database
 from memweave.durable import DurableMemoryStore
@@ -166,6 +167,46 @@ def test_update_replay_by_source_event_is_idempotent(tmp_path):
     assert [item.version for item in store.list_versions(
         MemoryScope.USER, "u1", "database.engine"
     )] == [1, 2]
+
+
+def test_update_rejects_compare_and_swap_loss_without_writing_a_new_version(
+    tmp_path, monkeypatch
+):
+    store = DurableMemoryStore(Database(str(tmp_path / "cas-race.db")))
+    store.create(make_record())
+
+    monkeypatch.setattr(
+        DurableMemoryStore,
+        "_supersede_latest",
+        staticmethod(lambda connection, latest: False),
+    )
+
+    with pytest.raises(StaleWriteError, match="concurrently"):
+        store.update(update_operation(value="MySQL"), source_seq=2)
+
+    history = store.list_versions(MemoryScope.USER, "u1", "database.engine")
+    assert [item.version for item in history] == [1]
+    assert history[0].status is MemoryStatus.ACTIVE
+
+
+def test_unique_version_race_is_exposed_as_stale_write(tmp_path, monkeypatch):
+    store = DurableMemoryStore(Database(str(tmp_path / "integrity-race.db")))
+    store.create(make_record())
+
+    def raise_duplicate(connection, record):
+        raise IntegrityError("duplicate durable version", {}, RuntimeError("duplicate"))
+
+    monkeypatch.setattr(
+        DurableMemoryStore, "_insert_record", staticmethod(raise_duplicate)
+    )
+
+    with pytest.raises(StaleWriteError, match="concurrently"):
+        store.update(update_operation(value="MySQL"), source_seq=2)
+
+    current = store.get_active(MemoryScope.USER, "u1", "database.engine")
+    assert current is not None
+    assert current.version == 1
+    assert current.value == "PostgreSQL"
 
 
 def test_forget_creates_tombstone_and_is_idempotent(tmp_path):

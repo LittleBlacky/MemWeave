@@ -1,11 +1,13 @@
 """Versioned durable memory authority with tombstone masking."""
 
 import json
+from contextlib import contextmanager
 from datetime import datetime
-from typing import Any
+from typing import Any, Iterator
 from uuid import NAMESPACE_URL, UUID, uuid5
 
 from sqlalchemy import insert, select, update
+from sqlalchemy.exc import IntegrityError
 
 from .clock import utc_now
 from .errors import StaleWriteError
@@ -36,7 +38,7 @@ class DurableMemoryStore:
 
     def create(self, record: MemoryRecord) -> MemoryRecord:
         self._validate_record(record)
-        with self.database.begin() as connection:
+        with self._transaction() as connection:
             source_match = self._find_source_match(
                 connection, record.scope, record.scope_id, record.key, record.source.event_ids
             )
@@ -62,7 +64,10 @@ class DurableMemoryStore:
                         f"memory version must increase: existing {latest.version}, "
                         f"got {record.version}"
                     )
-                self._supersede_latest(connection, latest)
+                if not self._supersede_latest(connection, latest):
+                    raise StaleWriteError(
+                        "memory version changed concurrently; retry the create"
+                    )
             self._insert_record(connection, record)
             return record
 
@@ -74,7 +79,7 @@ class DurableMemoryStore:
         source_event_id: UUID | str | None = None,
     ) -> MemoryRecord:
         self._validate_operation(operation, OperationType.UPDATE)
-        with self.database.begin() as connection:
+        with self._transaction() as connection:
             if source_event_id is not None:
                 source_match = self._find_source_match(
                     connection,
@@ -119,7 +124,10 @@ class DurableMemoryStore:
                 source_seq=resolved_source_seq,
                 source_event_id=source_event_id,
             )
-            self._supersede_latest(connection, latest)
+            if not self._supersede_latest(connection, latest):
+                raise StaleWriteError(
+                    "memory version changed concurrently; retry the update"
+                )
             self._insert_record(connection, record)
             return record
 
@@ -131,7 +139,7 @@ class DurableMemoryStore:
         source_event_id: UUID | str | None = None,
     ) -> MemoryRecord | None:
         self._validate_operation(operation, OperationType.FORGET)
-        with self.database.begin() as connection:
+        with self._transaction() as connection:
             if source_event_id is not None:
                 source_match = self._find_source_match(
                     connection,
@@ -171,9 +179,23 @@ class DurableMemoryStore:
                 source_event_id=source_event_id,
                 source=operation.source,
             )
-            self._supersede_latest(connection, latest)
+            if not self._supersede_latest(connection, latest):
+                raise StaleWriteError(
+                    "memory version changed concurrently; retry the forget"
+                )
             self._insert_record(connection, tombstone)
             return tombstone
+
+    @contextmanager
+    def _transaction(self) -> Iterator[Any]:
+        """Translate unique-version races into the public stale-write error."""
+        try:
+            with self.database.begin() as connection:
+                yield connection
+        except IntegrityError as exc:
+            raise StaleWriteError(
+                "durable memory version changed concurrently; retry the operation"
+            ) from exc
 
     def get_active(
         self, scope: MemoryScope, scope_id: str, key: str
@@ -336,19 +358,21 @@ class DurableMemoryStore:
         )
 
     @staticmethod
-    def _supersede_latest(connection, latest: MemoryRecord) -> None:
+    def _supersede_latest(connection, latest: MemoryRecord) -> bool:
         if latest.status in {MemoryStatus.SUPERSEDED, MemoryStatus.RETRACTED}:
-            return
-        connection.execute(
+            return True
+        result = connection.execute(
             update(durable_memories_table)
             .where(
                 durable_memories_table.c.scope == latest.scope.value,
                 durable_memories_table.c.scope_id == latest.scope_id,
                 durable_memories_table.c.key == latest.key,
                 durable_memories_table.c.version == latest.version,
+                durable_memories_table.c.status == MemoryStatus.ACTIVE.value,
             )
             .values(status=MemoryStatus.SUPERSEDED.value)
         )
+        return result.rowcount == 1
 
     @staticmethod
     def _insert_record(connection, record: MemoryRecord) -> None:
