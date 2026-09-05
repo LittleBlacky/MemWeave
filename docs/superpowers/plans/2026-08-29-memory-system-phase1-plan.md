@@ -164,7 +164,7 @@ docs/superpowers/logs/
 - Test: `tests/test_durable_versions.py`
 
 **Interfaces:**
-- `DurableMemoryStore.create(record)`, `update(operation)`, `forget(operation)`, `get_active(scope, scope_id, key)`, `list_versions(scope, scope_id, key)`.
+- `DurableMemoryStore.create(record)`, `update(operation)`, `forget(operation)`, `get_active(scope, scope_id, key)`, `list_versions(scope, scope_id, key)`; `create()` only accepts policy-approved `active` records.
 
 - [x] **Step 1: Write failing tests** for compare-and-swap versions, monotonic `source_seq`, same-value deduplication, idempotent forget, and tombstone masking.
 - [x] **Step 2: Run `python -m pytest tests/test_durable_versions.py -q`** and verify failure.

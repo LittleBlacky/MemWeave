@@ -18,6 +18,9 @@
   `StaleWriteError`，避免重复记忆和静默冲突。
 - 同一 memory key 的 `memory_id` 在版本链中保持稳定；`session_only` 记录拒绝进入
   长期权威表。
+- `DurableMemoryStore.create()` 现在只接受 `active` 初始记录；candidate、
+  needs_confirmation 以及其它生命周期状态不会遮蔽已有 active 记忆，候选晋升留给
+  Task 7 的策略流程。
 
 ## 验证
 

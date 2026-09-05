@@ -205,8 +205,12 @@ class DurableMemoryStore:
     def _validate_record(record: MemoryRecord) -> None:
         if not isinstance(record, MemoryRecord):
             raise TypeError("record must be a MemoryRecord")
-        if record.status is MemoryStatus.SESSION_ONLY:
-            raise ValueError("session_only records do not belong in durable authority")
+        if record.status is not MemoryStatus.ACTIVE:
+            raise ValueError(
+                "durable authority create requires an active record; "
+                "candidate and lifecycle transition states must use their "
+                "dedicated workflow"
+            )
 
     @classmethod
     def _validate_operation(

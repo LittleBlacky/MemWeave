@@ -133,6 +133,10 @@ needs_confirmation
 - **Durable Projection**：长期事实、经验和版本状态的权威投影。
 - **Search Projection**：向量、关键词和图索引，属于可重建派生数据，可以同时写入多个后端。
 
+长期权威存储只接受已经通过策略确认的 `active` 记录。`candidate` 和
+`needs_confirmation` 保留在候选/审核流程中，不得在写入长期版本链时替代已有的
+`active` 版本；`superseded`、`retracted` 和 `expired` 只能由对应的生命周期操作产生。
+
 投影不等于数据库。一个投影可以使用多个数据库，一个数据库也可以承载多个投影；Core 通过存储端口和 `StorageCoordinator` 管理这种组合。
 
 ### 4.3 水位、版本和幂等
@@ -160,6 +164,9 @@ FAILED 并要求重放，即使事件流当前没有 `N+1` 的新事件也不能
 ### 5.2 普通事实和偏好（异步候选）
 
 每轮结束后由规则或轻量模型提取候选，不直接标记为有效。策略引擎根据稳定性、未来复用价值、敏感级别、来源可信度和现有冲突决定：`promote`、`session_only`、`ask_confirmation` 或 `discard`。
+
+候选在审核完成前不进入长期权威版本链；只有 `promote` 决策才将候选规范化为
+`active` 记录并通过长期存储写入。
 
 ### 5.3 历史经验（任务完成后异步）
 

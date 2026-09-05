@@ -214,14 +214,23 @@ def test_newer_create_can_replace_tombstone(tmp_path):
     )] == [MemoryStatus.SUPERSEDED, MemoryStatus.RETRACTED, MemoryStatus.ACTIVE]
 
 
-def test_scopes_are_isolated_and_session_only_records_are_rejected(tmp_path):
+def test_scopes_are_isolated_and_non_active_records_are_rejected(tmp_path):
     store = DurableMemoryStore(Database(str(tmp_path / "scope.db")))
-    store.create(make_record())
+    active = store.create(make_record())
     other = make_record()
     other = other.model_copy(update={"scope": MemoryScope.PROJECT, "scope_id": "p1"})
     store.create(other)
 
     assert store.get_active(MemoryScope.USER, "u1", other.key) is not None
     assert store.get_active(MemoryScope.PROJECT, "p1", other.key) == other
-    with pytest.raises(ValueError, match="session_only"):
-        store.create(make_record(status=MemoryStatus.SESSION_ONLY))
+    for status in (
+        MemoryStatus.CANDIDATE,
+        MemoryStatus.NEEDS_CONFIRMATION,
+        MemoryStatus.SUPERSEDED,
+        MemoryStatus.RETRACTED,
+        MemoryStatus.EXPIRED,
+        MemoryStatus.SESSION_ONLY,
+    ):
+        with pytest.raises(ValueError, match="active"):
+            store.create(make_record(status=status))
+    assert store.get_active(MemoryScope.USER, "u1", active.key) == active
