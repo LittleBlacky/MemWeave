@@ -17,6 +17,8 @@ from memweave.storage.migrations import MigrationRunner
 from memweave.storage.ports import EventProjector, EventRepository, ProjectionBackend, VectorIndex
 from memweave.storage.sqlalchemy import SQLAlchemyDatabase
 from memweave.storage.schema import (
+    durable_memories_table,
+    durable_memory_identities_table,
     events_table,
     projection_event_receipts_table,
     projection_watermarks_table,
@@ -58,6 +60,7 @@ def test_sqlite_database_migrations_are_versioned_and_idempotent(tmp_path):
         "0010_validate_projection_receipts",
         "0011_validate_session_receipts",
         "0012_durable_memories",
+        "0013_durable_memory_identity",
     ]
 
 
@@ -77,6 +80,7 @@ def test_default_migration_runner_discovers_packaged_migrations():
         "0010_validate_projection_receipts",
         "0011_validate_session_receipts",
         "0012_durable_memories",
+        "0013_durable_memory_identity",
     ]
 
 
@@ -124,6 +128,7 @@ def test_generic_sqlalchemy_database_can_apply_core_migration(tmp_path):
         "0010_validate_projection_receipts",
         "0011_validate_session_receipts",
         "0012_durable_memories",
+        "0013_durable_memory_identity",
     ]
     assert database.applied_migrations() == [
         "0001_core",
@@ -138,6 +143,7 @@ def test_generic_sqlalchemy_database_can_apply_core_migration(tmp_path):
         "0010_validate_projection_receipts",
         "0011_validate_session_receipts",
         "0012_durable_memories",
+        "0013_durable_memory_identity",
     ]
 
 
@@ -180,6 +186,7 @@ def test_stream_identity_migration_upgrades_legacy_session_tables(tmp_path):
         "0010_validate_projection_receipts",
         "0011_validate_session_receipts",
         "0012_durable_memories",
+        "0013_durable_memory_identity",
     ]
     with database.read() as connection:
         assert "stream_id" in {
@@ -190,6 +197,132 @@ def test_stream_identity_migration_upgrades_legacy_session_tables(tmp_path):
             column["name"]
             for column in inspect(connection).get_columns("session_command_leases")
         }
+
+
+def test_durable_identity_migration_backfills_versions_and_rejects_conflicts(tmp_path):
+    database = SQLAlchemyDatabase(f"sqlite+pysqlite:///{tmp_path / 'identity.db'}")
+    database.apply_migrations()
+    with database.begin() as connection:
+        connection.execute(
+            delete(schema_migrations_table).where(
+                schema_migrations_table.c.version == "0013_durable_memory_identity"
+            )
+        )
+        durable_memory_identities_table.drop(connection)
+        connection.execute(
+            durable_memories_table.insert(),
+            [
+                {
+                    "memory_id": "memory-1",
+                    "scope": "user",
+                    "scope_id": "u1",
+                    "key": "database.engine",
+                    "version": 1,
+                    "kind": "fact",
+                    "value_json": '"PostgreSQL"',
+                    "status": "superseded",
+                    "confidence": 1.0,
+                    "source_json": '{"type":"explicit","event_ids":["event-1"]}',
+                    "source_seq": 1,
+                    "created_at": "2026-01-01T00:00:00+00:00",
+                    "updated_at": "2026-01-01T00:00:00+00:00",
+                },
+                {
+                    "memory_id": "memory-1",
+                    "scope": "user",
+                    "scope_id": "u1",
+                    "key": "database.engine",
+                    "version": 2,
+                    "kind": "fact",
+                    "value_json": '"SQLite"',
+                    "status": "active",
+                    "confidence": 1.0,
+                    "source_json": '{"type":"explicit","event_ids":["event-2"]}',
+                    "source_seq": 2,
+                    "created_at": "2026-01-01T00:00:00+00:00",
+                    "updated_at": "2026-01-01T00:00:00+00:00",
+                },
+            ],
+        )
+
+    assert database.apply_migrations() == ["0013_durable_memory_identity"]
+    with database.read() as connection:
+        identity = connection.execute(
+            select(durable_memory_identities_table)
+        ).mappings().all()
+    assert [dict(row) for row in identity] == [
+        {
+            "scope": "user",
+            "scope_id": "u1",
+            "memory_id": "memory-1",
+            "key": "database.engine",
+        }
+    ]
+
+    conflict_database = SQLAlchemyDatabase(
+        f"sqlite+pysqlite:///{tmp_path / 'identity-conflict.db'}"
+    )
+    conflict_database.apply_migrations()
+    with conflict_database.begin() as connection:
+        connection.execute(
+            delete(schema_migrations_table).where(
+                schema_migrations_table.c.version == "0013_durable_memory_identity"
+            )
+        )
+        durable_memory_identities_table.drop(connection)
+        connection.execute(
+            durable_memories_table.insert(),
+            [
+                {
+                    "memory_id": "memory-1",
+                    "scope": "user",
+                    "scope_id": "u1",
+                    "key": "database.engine",
+                    "version": 1,
+                    "kind": "fact",
+                    "value_json": '"PostgreSQL"',
+                    "status": "active",
+                    "confidence": 1.0,
+                    "source_json": '{"type":"explicit","event_ids":["event-1"]}',
+                    "source_seq": 1,
+                    "created_at": "2026-01-01T00:00:00+00:00",
+                    "updated_at": "2026-01-01T00:00:00+00:00",
+                },
+                {
+                    "memory_id": "memory-1",
+                    "scope": "user",
+                    "scope_id": "u1",
+                    "key": "database.host",
+                    "version": 1,
+                    "kind": "fact",
+                    "value_json": '"db"',
+                    "status": "active",
+                    "confidence": 1.0,
+                    "source_json": '{"type":"explicit","event_ids":["event-2"]}',
+                    "source_seq": 2,
+                    "created_at": "2026-01-01T00:00:00+00:00",
+                    "updated_at": "2026-01-01T00:00:00+00:00",
+                },
+            ],
+        )
+
+    with pytest.raises(ValueError, match="bound to multiple keys"):
+        conflict_database.apply_migrations()
+
+    assert conflict_database.applied_migrations() == [
+        "0001_core",
+        "0002_outbox",
+        "0003_outbox_consumer_receipts",
+        "0004_session_states",
+        "0005_session_command_leases",
+        "0006_session_stream_identity",
+        "0007_session_stream_recovery",
+        "0008_session_event_receipts",
+        "0009_projection_event_receipts",
+        "0010_validate_projection_receipts",
+        "0011_validate_session_receipts",
+        "0012_durable_memories",
+    ]
 
 
 def test_projection_receipt_backfill_rejects_incomplete_event_stream(tmp_path):
@@ -318,7 +451,7 @@ def test_stream_recovery_migration_resets_only_ambiguous_sessions(tmp_path):
             "('tenant:t/session:plain')"
         )
 
-    assert database.apply_migrations() == ["0007_session_stream_recovery", "0008_session_event_receipts", "0009_projection_event_receipts", "0010_validate_projection_receipts", "0011_validate_session_receipts", "0012_durable_memories"]
+    assert database.apply_migrations() == ["0007_session_stream_recovery", "0008_session_event_receipts", "0009_projection_event_receipts", "0010_validate_projection_receipts", "0011_validate_session_receipts", "0012_durable_memories", "0013_durable_memory_identity"]
     with database.read() as connection:
         assert connection.execute(
             text("SELECT COUNT(*) FROM session_states WHERE session_id = 'stream:legacy'")
@@ -357,7 +490,7 @@ def test_generic_sqlalchemy_database_migrations_are_safe_under_concurrent_startu
     with ThreadPoolExecutor(max_workers=8) as executor:
         results = list(executor.map(apply_migrations, range(8)))
 
-    assert sum(result == ["0001_core", "0002_outbox", "0003_outbox_consumer_receipts", "0004_session_states", "0005_session_command_leases", "0006_session_stream_identity", "0007_session_stream_recovery", "0008_session_event_receipts", "0009_projection_event_receipts", "0010_validate_projection_receipts", "0011_validate_session_receipts", "0012_durable_memories"] for result in results) == 1
+    assert sum(result == ["0001_core", "0002_outbox", "0003_outbox_consumer_receipts", "0004_session_states", "0005_session_command_leases", "0006_session_stream_identity", "0007_session_stream_recovery", "0008_session_event_receipts", "0009_projection_event_receipts", "0010_validate_projection_receipts", "0011_validate_session_receipts", "0012_durable_memories", "0013_durable_memory_identity"] for result in results) == 1
     assert sum(result == [] for result in results) == 7
     assert database.apply_migrations() == []
     assert database.applied_migrations() == [
@@ -373,6 +506,7 @@ def test_generic_sqlalchemy_database_migrations_are_safe_under_concurrent_startu
         "0010_validate_projection_receipts",
         "0011_validate_session_receipts",
         "0012_durable_memories",
+        "0013_durable_memory_identity",
     ]
 
 

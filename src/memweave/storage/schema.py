@@ -117,6 +117,21 @@ durable_memories_table = Table(
     ),
 )
 
+durable_memory_identities_table = Table(
+    "durable_memory_identities",
+    metadata,
+    Column("scope", String(32), nullable=False),
+    Column("scope_id", String(255), nullable=False),
+    Column("memory_id", String(36), nullable=False),
+    Column("key", String(512), nullable=False),
+    UniqueConstraint(
+        "scope",
+        "scope_id",
+        "memory_id",
+        name="pk_durable_memory_identity",
+    ),
+)
+
 schema_migrations_table = Table(
     "schema_migrations",
     metadata,

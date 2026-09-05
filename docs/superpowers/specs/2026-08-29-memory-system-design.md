@@ -143,7 +143,7 @@ needs_confirmation
 
 ### 4.3 水位、版本和幂等
 
-每个作用域记录 `session_watermark`、`durable_watermark`、`index_watermark`。长期记忆更新使用来源事件的 `source_seq`，而不是异步任务完成时间；更大的序号才能覆盖旧版本。每个任务携带 `event_id`、`idempotency_key`、`source_seq` 和尝试次数，重复投递只允许第一次生效。
+每个作用域记录 `session_watermark`、`durable_watermark`、`index_watermark`。长期记忆更新使用来源事件的 `source_seq`，而不是异步任务完成时间；更大的序号才能覆盖旧版本。每个任务携带 `event_id`、`idempotency_key`、`source_seq` 和尝试次数，重复投递只允许第一次生效。版本表按版本保存多行，因此同一作用域内的 `memory_id` 绑定关系由独立身份注册表维护；一个 `memory_id` 不能跨 key 重用，历史冲突必须在迁移时显式失败。
 
 事件投影的持久化 checkpoint 表示连续处理水位，而不是已见到的最大序号。启用 checkpoint 的 Dispatcher 遇到序号间隙时暂存事件，不推进水位；缺口补齐后按序投影并连续推进。未配置 checkpoint 的进程内 best-effort 分发不提供跨重启的乱序恢复保证。
 

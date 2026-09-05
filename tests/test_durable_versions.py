@@ -377,6 +377,20 @@ def test_forget_rejects_same_key_with_different_memory_id(tmp_path):
     assert store.get_active(MemoryScope.USER, "u1", legacy.key) == legacy
 
 
+def test_memory_id_cannot_be_reused_for_another_key_in_scope(tmp_path):
+    store = DurableMemoryStore(Database(str(tmp_path / "memory-id-unique.db")))
+    original = store.create(make_record())
+    duplicate = make_record(
+        key="database.host",
+        memory_id=original.id,
+        source_seq=1,
+        version=1,
+    )
+
+    with pytest.raises(StaleWriteError, match="different memory key"):
+        store.create(duplicate)
+
+
 def test_newer_create_can_replace_tombstone(tmp_path):
     store = DurableMemoryStore(Database(str(tmp_path / "restore.db")))
     original = store.create(make_record())
