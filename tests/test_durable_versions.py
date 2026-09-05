@@ -44,7 +44,7 @@ def make_record(
     )
 
 
-def update_operation(*, value, expected_version=None, key="database.engine"):
+def update_operation(*, value, expected_version=1, key="database.engine"):
     return MemoryOperation(
         operation=OperationType.UPDATE,
         scope=MemoryScope.USER,
@@ -138,7 +138,7 @@ def test_update_requires_expected_version_when_supplied_and_rejects_stale_source
 ):
     store = DurableMemoryStore(Database(str(tmp_path / "stale.db")))
     store.create(make_record())
-    store.update(update_operation(value="MySQL"), source_seq=2)
+    store.update(update_operation(value="MySQL", expected_version=1), source_seq=2)
 
     with pytest.raises(StaleWriteError):
         store.update(
@@ -152,11 +152,23 @@ def test_update_requires_expected_version_when_supplied_and_rejects_stale_source
     assert store.get_active(MemoryScope.USER, "u1", "database.engine").value == "MySQL"
 
 
+def test_update_requires_expected_version(tmp_path):
+    store = DurableMemoryStore(Database(str(tmp_path / "missing-version.db")))
+    store.create(make_record())
+
+    with pytest.raises(ValueError, match="expected_version"):
+        store.update(
+            update_operation(value="MySQL", expected_version=None), source_seq=2
+        )
+
+    assert store.get_active(MemoryScope.USER, "u1", "database.engine").value == "PostgreSQL"
+
+
 def test_update_replay_by_source_event_is_idempotent(tmp_path):
     store = DurableMemoryStore(Database(str(tmp_path / "update-replay.db")))
     store.create(make_record())
     source_event_id = uuid4()
-    operation = update_operation(value="MySQL")
+    operation = update_operation(value="MySQL", expected_version=1)
 
     first = store.update(operation, source_seq=2, source_event_id=source_event_id)
     replay = store.update(
@@ -182,7 +194,7 @@ def test_update_rejects_compare_and_swap_loss_without_writing_a_new_version(
     )
 
     with pytest.raises(StaleWriteError, match="concurrently"):
-        store.update(update_operation(value="MySQL"), source_seq=2)
+        store.update(update_operation(value="MySQL", expected_version=1), source_seq=2)
 
     history = store.list_versions(MemoryScope.USER, "u1", "database.engine")
     assert [item.version for item in history] == [1]
@@ -201,7 +213,7 @@ def test_unique_version_race_is_exposed_as_stale_write(tmp_path, monkeypatch):
     )
 
     with pytest.raises(StaleWriteError, match="concurrently"):
-        store.update(update_operation(value="MySQL"), source_seq=2)
+        store.update(update_operation(value="MySQL", expected_version=1), source_seq=2)
 
     current = store.get_active(MemoryScope.USER, "u1", "database.engine")
     assert current is not None
