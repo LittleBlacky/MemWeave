@@ -85,6 +85,7 @@ def test_session_memory_precedes_durable_and_duplicate_key_is_suppressed(tmp_pat
     assert [item.value for item in result.items] == ["SQLite"]
     assert result.degraded is False
     assert result.watermarks["session"] == 1
+    assert result.watermarks["durable"] == 0
 
 
 def test_scope_isolation_and_tombstone_filtering(tmp_path):

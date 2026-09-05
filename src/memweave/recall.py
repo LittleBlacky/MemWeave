@@ -48,7 +48,6 @@ class RecallService:
         visible = self._visible_scopes(request)
         degraded = False
         candidates: list[MemoryRecord] = []
-        durable_watermark = 0
 
         session_scope = f"{MemoryScope.SESSION.value}:{request.session_id}"
         session_watermark = 0
@@ -71,18 +70,15 @@ class RecallService:
                 try:
                     records = self.durable_store.list_active(scope, scope_id)
                     candidates.extend(records)
-                    if records:
-                        durable_watermark = max(
-                            durable_watermark,
-                            max(record.source_seq for record in records),
-                        )
                 except Exception:
                     degraded = True
 
         items = self._rank_and_merge(candidates, request)
         return RecallResult(
             items=items,
-            watermarks={"session": session_watermark, "durable": durable_watermark},
+            # DurableMemoryStore currently exposes records, not its projection
+            # watermark. Do not mistake a record's source_seq for that watermark.
+            watermarks={"session": session_watermark, "durable": 0},
             consistency=request.consistency,
             degraded=degraded,
         )

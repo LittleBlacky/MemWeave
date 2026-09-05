@@ -12,6 +12,7 @@
 - 召回结果执行作用域、kind、去重、关键词排序、Top-K 和 token 预算过滤。
 - Durable 读取失败时保留会话结果并返回 `degraded=True`。
 - `DurableMemoryStore.list_active()` 通过权威版本链返回某作用域的 active 记录。
+- 不把记忆记录的 `source_seq` 冒充 Durable Projection watermark；当前 durable 水位保持未知，等待后续明确的水位接口。
 
 ## 验证
 
