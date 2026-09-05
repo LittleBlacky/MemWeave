@@ -118,7 +118,10 @@ class DurableMemoryStore:
                 if source_match is not None:
                     expected_kind = operation.kind or source_match.kind
                     if (
-                        source_match.status is MemoryStatus.ACTIVE
+                        source_match.version > 1
+                        and operation.expected_version == source_match.version - 1
+                        and source_seq == source_match.source_seq
+                        and source_match.status is MemoryStatus.ACTIVE
                         and source_match.value == operation.value
                         and source_match.kind is expected_kind
                     ):
@@ -175,7 +178,14 @@ class DurableMemoryStore:
                 )
                 if source_match is not None:
                     if source_match.status is MemoryStatus.RETRACTED:
-                        return source_match
+                        if (
+                            operation.expected_version == source_match.version - 1
+                            and source_seq == source_match.source_seq
+                        ):
+                            return source_match
+                        raise StaleWriteError(
+                            "source event already applied with different delete"
+                        )
                     raise StaleWriteError(
                         "source event already applied to a different memory operation"
                     )
@@ -183,6 +193,11 @@ class DurableMemoryStore:
             if latest is None:
                 return None
             if latest.status is MemoryStatus.RETRACTED:
+                if operation.expected_version != latest.version - 1:
+                    raise StaleWriteError(
+                        f"expected memory version {operation.expected_version}, "
+                        f"got {latest.version - 1} for the deleted version"
+                    )
                 if source_seq <= latest.source_seq:
                     return latest
                 return latest

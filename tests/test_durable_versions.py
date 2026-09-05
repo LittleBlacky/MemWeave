@@ -228,6 +228,30 @@ def test_update_replay_by_source_event_is_idempotent(tmp_path):
     )] == [1, 2]
 
 
+def test_update_replay_rejects_changed_version_or_source_sequence(tmp_path):
+    store = DurableMemoryStore(Database(str(tmp_path / "update-replay-conflict.db")))
+    store.create(make_record())
+    source_event_id = uuid4()
+    store.update(
+        update_operation(value="MySQL", expected_version=1),
+        source_seq=2,
+        source_event_id=source_event_id,
+    )
+
+    with pytest.raises(StaleWriteError, match="source event"):
+        store.update(
+            update_operation(value="MySQL", expected_version=2),
+            source_seq=2,
+            source_event_id=source_event_id,
+        )
+    with pytest.raises(StaleWriteError, match="source event"):
+        store.update(
+            update_operation(value="MySQL", expected_version=1),
+            source_seq=3,
+            source_event_id=source_event_id,
+        )
+
+
 def test_update_rejects_compare_and_swap_loss_without_writing_a_new_version(
     tmp_path, monkeypatch
 ):
@@ -283,6 +307,24 @@ def test_forget_creates_tombstone_and_is_idempotent(tmp_path):
     history = store.list_versions(MemoryScope.USER, "u1", "database.engine")
     assert [item.version for item in history] == [1, 2]
     assert history[0].id == original.id
+
+
+def test_forget_replay_rejects_changed_expected_version(tmp_path):
+    store = DurableMemoryStore(Database(str(tmp_path / "forget-replay-conflict.db")))
+    store.create(make_record())
+    source_event_id = uuid4()
+    store.forget(
+        forget_operation(expected_version=1),
+        source_seq=2,
+        source_event_id=source_event_id,
+    )
+
+    with pytest.raises(StaleWriteError, match="source event"):
+        store.forget(
+            forget_operation(expected_version=2),
+            source_seq=2,
+            source_event_id=source_event_id,
+        )
 
 
 def test_forget_requires_expected_version_and_rejects_stale_delete(tmp_path):
