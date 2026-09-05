@@ -105,6 +105,7 @@ class DurableMemoryStore:
         source_event_id: UUID | str | None = None,
     ) -> MemoryRecord:
         self._validate_operation(operation, OperationType.UPDATE)
+        source_seq = self._validate_source_seq(source_seq)
         with self._transaction() as connection:
             if source_event_id is not None:
                 source_match = self._find_source_match(
@@ -140,14 +141,11 @@ class DurableMemoryStore:
                     f"expected memory version {operation.expected_version}, "
                     f"got {latest.version}"
                 )
-            resolved_source_seq = self._resolve_source_seq(
-                source_seq, latest.source_seq
-            )
-            self._assert_newer(resolved_source_seq, latest.source_seq)
+            self._assert_newer(source_seq, latest.source_seq)
             record = self._updated_record(
                 latest,
                 operation,
-                source_seq=resolved_source_seq,
+                source_seq=source_seq,
                 source_event_id=source_event_id,
             )
             if not self._supersede_latest(connection, latest):
@@ -165,6 +163,7 @@ class DurableMemoryStore:
         source_event_id: UUID | str | None = None,
     ) -> MemoryRecord | None:
         self._validate_operation(operation, OperationType.FORGET)
+        source_seq = self._validate_source_seq(source_seq)
         with self._transaction() as connection:
             if source_event_id is not None:
                 source_match = self._find_source_match(
@@ -183,11 +182,8 @@ class DurableMemoryStore:
             latest = self._find_forget_target(connection, operation)
             if latest is None:
                 return None
-            resolved_source_seq = self._resolve_source_seq(
-                source_seq, latest.source_seq
-            )
             if latest.status is MemoryStatus.RETRACTED:
-                if resolved_source_seq <= latest.source_seq:
+                if source_seq <= latest.source_seq:
                     return latest
                 return latest
             if (
@@ -198,10 +194,10 @@ class DurableMemoryStore:
                     f"expected memory version {operation.expected_version}, "
                     f"got {latest.version}"
                 )
-            self._assert_newer(resolved_source_seq, latest.source_seq)
+            self._assert_newer(source_seq, latest.source_seq)
             tombstone = self._tombstone_record(
                 latest,
-                source_seq=resolved_source_seq,
+                source_seq=source_seq,
                 source_event_id=source_event_id,
                 source=operation.source,
             )
@@ -287,9 +283,9 @@ class DurableMemoryStore:
             raise ValueError("key must be a non-empty string")
 
     @staticmethod
-    def _resolve_source_seq(source_seq: int | None, current: int) -> int:
+    def _validate_source_seq(source_seq: int | None) -> int:
         if source_seq is None:
-            return current + 1
+            raise ValueError("durable write requires source_seq")
         if not isinstance(source_seq, int) or isinstance(source_seq, bool):
             raise TypeError("source_seq must be an integer")
         if source_seq < 1:

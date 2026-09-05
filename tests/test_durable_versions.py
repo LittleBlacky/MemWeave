@@ -205,6 +205,11 @@ def test_update_requires_expected_version(tmp_path):
 
     assert store.get_active(MemoryScope.USER, "u1", "database.engine").value == "PostgreSQL"
 
+    with pytest.raises(ValueError, match="source_seq"):
+        store.update(
+            update_operation(value="MySQL", expected_version=1), source_seq=None
+        )
+
 
 def test_update_replay_by_source_event_is_idempotent(tmp_path):
     store = DurableMemoryStore(Database(str(tmp_path / "update-replay.db")))
@@ -286,6 +291,8 @@ def test_forget_requires_expected_version_and_rejects_stale_delete(tmp_path):
 
     with pytest.raises(ValueError, match="expected_version"):
         store.forget(forget_operation(expected_version=None), source_seq=2)
+    with pytest.raises(ValueError, match="source_seq"):
+        store.forget(forget_operation(expected_version=1), source_seq=None)
 
     store.update(update_operation(value="MySQL", expected_version=1), source_seq=2)
     with pytest.raises(StaleWriteError, match="expected memory version"):
