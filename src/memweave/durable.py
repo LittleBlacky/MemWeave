@@ -445,14 +445,29 @@ class DurableMemoryStore:
 
     @staticmethod
     def _insert_record(connection, record: MemoryRecord) -> None:
-        identity = connection.execute(
+        identity_by_id = connection.execute(
             select(durable_memory_identities_table).where(
                 durable_memory_identities_table.c.scope == record.scope.value,
                 durable_memory_identities_table.c.scope_id == record.scope_id,
                 durable_memory_identities_table.c.memory_id == str(record.id),
             )
         ).mappings().first()
-        if identity is None:
+        identity_by_key = connection.execute(
+            select(durable_memory_identities_table).where(
+                durable_memory_identities_table.c.scope == record.scope.value,
+                durable_memory_identities_table.c.scope_id == record.scope_id,
+                durable_memory_identities_table.c.key == record.key,
+            )
+        ).mappings().first()
+        if identity_by_id is not None and identity_by_id["key"] != record.key:
+            raise StaleWriteError(
+                "memory_id is already bound to a different memory key"
+            )
+        if identity_by_key is not None and identity_by_key["memory_id"] != str(record.id):
+            raise StaleWriteError(
+                "memory key is already bound to a different memory_id"
+            )
+        if identity_by_id is None and identity_by_key is None:
             connection.execute(
                 insert(durable_memory_identities_table).values(
                     scope=record.scope.value,
@@ -460,10 +475,6 @@ class DurableMemoryStore:
                     memory_id=str(record.id),
                     key=record.key,
                 )
-            )
-        elif identity["key"] != record.key:
-            raise StaleWriteError(
-                "memory_id is already bound to a different memory key"
             )
         connection.execute(
             insert(durable_memories_table).values(

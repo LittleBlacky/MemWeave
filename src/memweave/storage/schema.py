@@ -130,6 +130,12 @@ durable_memory_identities_table = Table(
         "memory_id",
         name="pk_durable_memory_identity",
     ),
+    UniqueConstraint(
+        "scope",
+        "scope_id",
+        "key",
+        name="uq_durable_memory_identity_key",
+    ),
 )
 
 schema_migrations_table = Table(

@@ -324,6 +324,56 @@ def test_durable_identity_migration_backfills_versions_and_rejects_conflicts(tmp
         "0012_durable_memories",
     ]
 
+    key_conflict_database = SQLAlchemyDatabase(
+        f"sqlite+pysqlite:///{tmp_path / 'identity-key-conflict.db'}"
+    )
+    key_conflict_database.apply_migrations()
+    with key_conflict_database.begin() as connection:
+        connection.execute(
+            delete(schema_migrations_table).where(
+                schema_migrations_table.c.version == "0013_durable_memory_identity"
+            )
+        )
+        durable_memory_identities_table.drop(connection)
+        connection.execute(
+            durable_memories_table.insert(),
+            [
+                {
+                    "memory_id": "memory-1",
+                    "scope": "user",
+                    "scope_id": "u1",
+                    "key": "database.engine",
+                    "version": 1,
+                    "kind": "fact",
+                    "value_json": '"PostgreSQL"',
+                    "status": "active",
+                    "confidence": 1.0,
+                    "source_json": '{"type":"explicit","event_ids":["event-1"]}',
+                    "source_seq": 1,
+                    "created_at": "2026-01-01T00:00:00+00:00",
+                    "updated_at": "2026-01-01T00:00:00+00:00",
+                },
+                {
+                    "memory_id": "memory-2",
+                    "scope": "user",
+                    "scope_id": "u1",
+                    "key": "database.engine",
+                    "version": 2,
+                    "kind": "fact",
+                    "value_json": '"SQLite"',
+                    "status": "active",
+                    "confidence": 1.0,
+                    "source_json": '{"type":"explicit","event_ids":["event-2"]}',
+                    "source_seq": 2,
+                    "created_at": "2026-01-01T00:00:00+00:00",
+                    "updated_at": "2026-01-01T00:00:00+00:00",
+                },
+            ],
+        )
+
+    with pytest.raises(ValueError, match="multiple memory identities"):
+        key_conflict_database.apply_migrations()
+
 
 def test_projection_receipt_backfill_rejects_incomplete_event_stream(tmp_path):
     database = SQLiteDatabase(str(tmp_path / "projection-receipt-gap.db"))

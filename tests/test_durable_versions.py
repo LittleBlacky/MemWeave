@@ -381,24 +381,18 @@ def test_forget_rejects_reuse_of_source_event_from_another_version(tmp_path):
         )
 
 
-def test_forget_rejects_same_key_with_different_memory_id(tmp_path):
-    store = DurableMemoryStore(Database(str(tmp_path / "forget-identity-conflict.db")))
+def test_insert_rejects_same_key_with_different_memory_id(tmp_path):
+    store = DurableMemoryStore(Database(str(tmp_path / "memory-key-identity.db")))
     original = store.create(make_record())
-    legacy = make_record(
+    replacement = make_record(
         value="MySQL", source_seq=2, version=2, memory_id=uuid4()
     )
-    with store.database.begin() as connection:
-        DurableMemoryStore._insert_record(connection, legacy)
 
-    with pytest.raises(ValueError, match="different memories"):
-        store.forget(
-            forget_operation(
-                key=legacy.key, memory_id=original.id, expected_version=2
-            ),
-            source_seq=3,
-        )
+    with pytest.raises(StaleWriteError, match="different memory_id"):
+        with store.database.begin() as connection:
+            DurableMemoryStore._insert_record(connection, replacement)
 
-    assert store.get_active(MemoryScope.USER, "u1", legacy.key) == legacy
+    assert store.get_active(MemoryScope.USER, "u1", original.key) == original
 
 
 def test_memory_id_cannot_be_reused_for_another_key_in_scope(tmp_path):

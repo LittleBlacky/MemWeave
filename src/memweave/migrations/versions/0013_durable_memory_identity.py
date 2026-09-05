@@ -34,8 +34,10 @@ def upgrade(connection: Connection) -> None:
     ).mappings().all()
 
     identities: dict[tuple[str, str, str], str] = {}
+    keys: dict[tuple[str, str, str], str] = {}
     for row in rows:
         identity = (row["scope"], row["scope_id"], row["memory_id"])
+        key_identity = (row["scope"], row["scope_id"], row["key"])
         key = row["key"]
         previous_key = identities.setdefault(identity, key)
         if previous_key != key:
@@ -43,6 +45,13 @@ def upgrade(connection: Connection) -> None:
                 "durable memory identity is bound to multiple keys: "
                 f"scope={identity[0]!r}, scope_id={identity[1]!r}, "
                 f"memory_id={identity[2]!r}"
+            )
+        previous_memory_id = keys.setdefault(key_identity, row["memory_id"])
+        if previous_memory_id != row["memory_id"]:
+            raise ValueError(
+                "durable memory key is bound to multiple memory identities: "
+                f"scope={key_identity[0]!r}, scope_id={key_identity[1]!r}, "
+                f"key={key_identity[2]!r}"
             )
 
     for (scope, scope_id, memory_id), key in identities.items():
