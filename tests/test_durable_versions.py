@@ -308,6 +308,9 @@ def test_forget_creates_tombstone_and_is_idempotent(tmp_path):
     assert [item.version for item in history] == [1, 2]
     assert history[0].id == original.id
 
+    with pytest.raises(StaleWriteError, match="different source_seq"):
+        store.forget(forget, source_seq=3)
+
 
 def test_forget_replay_rejects_changed_expected_version(tmp_path):
     store = DurableMemoryStore(Database(str(tmp_path / "forget-replay-conflict.db")))
@@ -324,6 +327,27 @@ def test_forget_replay_rejects_changed_expected_version(tmp_path):
             forget_operation(expected_version=2),
             source_seq=2,
             source_event_id=source_event_id,
+        )
+
+
+def test_forget_by_memory_id_replay_rejects_changed_source_sequence(tmp_path):
+    store = DurableMemoryStore(Database(str(tmp_path / "forget-memory-id-replay.db")))
+    original = store.create(make_record())
+    source_event_id = uuid4()
+    operation = forget_operation(
+        key=None, memory_id=original.id, expected_version=1
+    )
+
+    first = store.forget(
+        operation, source_seq=2, source_event_id=source_event_id
+    )
+    assert store.forget(
+        operation, source_seq=2, source_event_id=source_event_id
+    ) == first
+
+    with pytest.raises(StaleWriteError, match="different delete"):
+        store.forget(
+            operation, source_seq=3, source_event_id=source_event_id
         )
 
 

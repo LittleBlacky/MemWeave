@@ -43,6 +43,9 @@
   `durable_memory_identities` 注册表，保证一个作用域内的 `memory_id` 只能绑定一个
   key。新版本写入前校验绑定关系，历史迁移发现同一身份绑定多个 key 时整体失败，
   不自动选择或删除冲突记录。
+- 仅携带 `memory_id` 的删除重放现在先通过身份注册表解析真实 key，再匹配原始
+  `source_event_id`；已存在 tombstone 只有在 `expected_version` 和 `source_seq`
+  都一致时才幂等返回，参数变化会明确拒绝，避免删除命令冲突被静默吞掉。
 
 ## 验证
 

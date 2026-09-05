@@ -169,11 +169,19 @@ class DurableMemoryStore:
         source_seq = self._validate_source_seq(source_seq)
         with self._transaction() as connection:
             if source_event_id is not None:
+                source_key = operation.key
+                if source_key is None and operation.memory_id is not None:
+                    source_key = self._key_for_memory_id(
+                        connection,
+                        operation.scope,
+                        operation.scope_id,
+                        operation.memory_id,
+                    )
                 source_match = self._find_source_match(
                     connection,
                     operation.scope,
                     operation.scope_id,
-                    operation.key,
+                    source_key,
                     [str(source_event_id)],
                 )
                 if source_match is not None:
@@ -198,9 +206,11 @@ class DurableMemoryStore:
                         f"expected memory version {operation.expected_version}, "
                         f"got {latest.version - 1} for the deleted version"
                     )
-                if source_seq <= latest.source_seq:
+                if source_seq == latest.source_seq:
                     return latest
-                return latest
+                raise StaleWriteError(
+                    "memory delete was already applied with different source_seq"
+                )
             if (
                 operation.expected_version is not None
                 and latest.version != operation.expected_version
@@ -329,7 +339,9 @@ class DurableMemoryStore:
         return None if row is None else DurableMemoryStore._row_to_record(row)
 
     @staticmethod
-    def _find_source_match(connection, scope, scope_id: str, key: str, event_ids):
+    def _find_source_match(
+        connection, scope, scope_id: str, key: str | None, event_ids
+    ):
         """Find a prior version carrying one of the source evidence IDs.
 
         Source evidence is stored as structured JSON rather than a separate
@@ -354,6 +366,17 @@ class DurableMemoryStore:
             if wanted.intersection(str(item) for item in source.get("event_ids", [])):
                 return DurableMemoryStore._row_to_record(row)
         return None
+
+    @staticmethod
+    def _key_for_memory_id(connection, scope, scope_id: str, memory_id: UUID | str):
+        row = connection.execute(
+            select(durable_memory_identities_table.c.key).where(
+                durable_memory_identities_table.c.scope == scope.value,
+                durable_memory_identities_table.c.scope_id == scope_id,
+                durable_memory_identities_table.c.memory_id == str(memory_id),
+            )
+        ).first()
+        return None if row is None else row[0]
 
     @staticmethod
     def _find_forget_target(connection, operation: MemoryOperation):
